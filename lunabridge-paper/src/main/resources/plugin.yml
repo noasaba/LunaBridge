@@ -1,0 +1,7 @@
+name: LunaBridge-Paper
+main: dev.lunabridge.paper.LunaBridgePaperPlugin
+version: ${version}
+api-version: '1.21'
+description: Secure LunaChat network and Discord bridge client
+author: LunaBridge
+softdepend: [LunaChat]
