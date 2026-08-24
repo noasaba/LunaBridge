@@ -61,4 +61,18 @@ class SecureProtocolTest {
         assertEquals(ProtocolException.Code.AUTHENTICATION_FAILED,
                 assertThrows(ProtocolException.class, () -> HandshakeMessages.prove(client, changed, CLOCK)).code());
     }
+
+    @Test void handshakeRejectsMalformedUtf8AndTruncatedMac() {
+        byte[] key = SharedPassphrase.from("correct horse battery staple").keyForServer("a");
+        HandshakeMessages.Hello hello = HandshakeMessages.begin("a", key, CLOCK).hello();
+        byte[] malformed = HandshakeMessages.encode(hello);
+        malformed[1] = (byte) 0xC0;
+        assertEquals(ProtocolException.Code.MALFORMED,
+                assertThrows(ProtocolException.class, () -> HandshakeMessages.decodeHello(malformed)).code());
+
+        byte[] encoded = HandshakeMessages.encode(hello);
+        byte[] truncated = java.util.Arrays.copyOf(encoded, encoded.length - 1);
+        assertEquals(ProtocolException.Code.MALFORMED,
+                assertThrows(ProtocolException.class, () -> HandshakeMessages.decodeHello(truncated)).code());
+    }
 }

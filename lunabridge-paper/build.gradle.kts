@@ -3,8 +3,9 @@ plugins {
     id("com.gradleup.shadow") version "9.2.2"
 }
 
-val paperApiVersion: String by project
-val lunaChatVersion: String by project
+val paperApiVersion = project.property("paperApiVersion").toString()
+val lunaChatVersion = project.property("lunaChatVersion").toString()
+val pluginVersion = version.toString()
 
 repositories {
     mavenCentral()
@@ -22,8 +23,8 @@ dependencies {
 }
 
 tasks.processResources {
-    inputs.property("version", project.version)
-    filesMatching("plugin.yml") { expand("version" to project.version) }
+    inputs.property("version", pluginVersion)
+    filesMatching("plugin.yml") { expand("version" to pluginVersion) }
 }
 
 tasks.shadowJar {

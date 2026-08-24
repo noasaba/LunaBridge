@@ -1,5 +1,6 @@
 package dev.lunabridge.core.model;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
@@ -31,7 +32,7 @@ public record BridgeMessage(
         requireText(authorName, "authorName", 128);
         requireText(sourceServer, "sourceServer", 64);
         Objects.requireNonNull(content, "content");
-        if (content.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_CONTENT_BYTES) {
+        if (content.getBytes(StandardCharsets.UTF_8).length > MAX_CONTENT_BYTES) {
             throw new IllegalArgumentException("content exceeds 16 KiB");
         }
         Objects.requireNonNull(issuedAt, "issuedAt");
@@ -51,8 +52,8 @@ public record BridgeMessage(
         }
     }
 
-    private static void requireText(String value, String name, int maxChars) {
-        if (value == null || value.isBlank() || value.length() > maxChars) {
+    private static void requireText(String value, String name, int maxBytes) {
+        if (value == null || value.isBlank() || value.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
             throw new IllegalArgumentException(name + " is missing or too long");
         }
     }

@@ -87,8 +87,10 @@ final class VelocityNetworkAuthority {
     private void receiveHello(ServerConnection connection, String serverId, byte[] payload) throws ProtocolException {
         HandshakeMessages.Hello hello = HandshakeMessages.decodeHello(payload);
         if (!serverId.equals(hello.serverId())) throw new ProtocolException(ProtocolException.Code.AUTHENTICATION_FAILED, "backend identity mismatch");
-        if (challenges.size() >= MAX_CHALLENGES) throw new ProtocolException(ProtocolException.Code.LIMIT_EXCEEDED, "handshake admission full");
         HandshakeMessages.IssuedChallenge challenge = HandshakeMessages.challenge(hello, secret.keyForServer(serverId), clock);
+        // Only an authenticated hello may replace the backend's previous pending challenge.
+        challenges.entrySet().removeIf(entry -> entry.getValue().serverId.equals(serverId));
+        if (challenges.size() >= MAX_CHALLENGES) throw new ProtocolException(ProtocolException.Code.LIMIT_EXCEEDED, "handshake admission full");
         challenges.put(challenge.challenge().sessionId(), new ChallengeRecord(serverId, challenge));
         send(connection, ProtocolType.CHALLENGE, HandshakeMessages.encode(challenge.challenge()));
     }
@@ -102,7 +104,7 @@ final class VelocityNetworkAuthority {
             throw new ProtocolException(ProtocolException.Code.LIMIT_EXCEEDED, "backend session ceiling reached");
         }
         SessionKeys keys = HandshakeMessages.keys(record.challenge);
-        BackendSession replacement = new BackendSession(serverId, connection, accepted.sessionId(),
+        BackendSession replacement = new BackendSession(serverId,
                 new SecureFrameCodec(accepted.sessionId(), epoch, keys, true, clock),
                 new SecureFrameCodec(accepted.sessionId(), epoch, keys, false, clock), pendingLimit);
         BackendSession prior = sessions.put(serverId, replacement);
@@ -113,7 +115,7 @@ final class VelocityNetworkAuthority {
 
     private void receiveSecure(ServerConnection connection, String serverId, ProtocolType outerType, byte[] payload) throws ProtocolException {
         BackendSession session = sessions.get(serverId);
-        if (session == null || session.connection != connection) throw new ProtocolException(ProtocolException.Code.INVALID_SESSION, "unregistered backend connection");
+        if (session == null) throw new ProtocolException(ProtocolException.Code.INVALID_SESSION, "unregistered backend session");
         SecureFrameCodec.Decoded frame = session.inbound.decode(payload);
         if (frame.type() != outerType) throw new ProtocolException(ProtocolException.Code.MALFORMED, "outer and encrypted types differ");
         if (frame.type() == ProtocolType.ACK) {
@@ -127,7 +129,7 @@ final class VelocityNetworkAuthority {
         }
         BoundedDedupCache.Result dedup = received.admit(message.id());
         if (dedup == BoundedDedupCache.Result.FULL) throw new ProtocolException(ProtocolException.Code.LIMIT_EXCEEDED, "dedup full");
-        sendAcknowledgement(session, message.id());
+        sendAcknowledgement(session, connection, message.id());
         if (dedup == BoundedDedupCache.Result.NEW) route(message, serverId);
     }
 
@@ -138,14 +140,22 @@ final class VelocityNetworkAuthority {
         }
     }
 
-    private void sendAcknowledgement(BackendSession source, UUID messageId) {
-        try { send(source.connection, ProtocolType.ACK, source.outbound.encode(ProtocolType.ACK, messageId, AckCodec.encode(messageId), 10_000)); }
+    private void sendAcknowledgement(BackendSession source, ServerConnection carrier, UUID messageId) {
+        try { send(carrier, ProtocolType.ACK, source.outbound.encode(ProtocolType.ACK, messageId, AckCodec.encode(messageId), 10_000)); }
         catch (ProtocolException rejected) { reject(source.serverId, "cannot emit acknowledgement"); }
     }
     private void send(ServerConnection connection, ProtocolType type, byte[] payload) {
         connection.sendPluginMessage(LunaBridgeVelocityPlugin.CHANNEL, WirePacket.wrap(type, payload));
     }
     private void reject(String backend, String detail) { logger.warn("LunaBridge rejected network data from {}: {}", backend, detail); }
+    private ServerConnection carrierFor(String serverId) {
+        return proxy.getServer(serverId)
+                .flatMap(server -> server.getPlayersConnected().stream()
+                        .flatMap(player -> player.getCurrentServer().stream())
+                        .filter(connection -> serverId.equals(connection.getServerInfo().getName()))
+                        .findFirst())
+                .orElse(null);
+    }
     private boolean reservePending() { if (pendingInFlight >= pendingLimit) return false; pendingInFlight++; return true; }
     private void releasePending() { if (pendingInFlight > 0) pendingInFlight--; }
 
@@ -153,17 +163,17 @@ final class VelocityNetworkAuthority {
 
     private final class BackendSession {
         private final String serverId;
-        private final ServerConnection connection;
         private final SecureFrameCodec inbound;
         private final SecureFrameCodec outbound;
         private final int maxPending;
         private final Map<UUID, PendingFrame> pending = new LinkedHashMap<>();
 
-        BackendSession(String serverId, ServerConnection connection, UUID ignoredSessionId, SecureFrameCodec inbound,
-                       SecureFrameCodec outbound, int maxPending) {
-            this.serverId = serverId; this.connection = connection; this.inbound = inbound; this.outbound = outbound; this.maxPending = maxPending;
+        BackendSession(String serverId, SecureFrameCodec inbound, SecureFrameCodec outbound, int maxPending) {
+            this.serverId = serverId; this.inbound = inbound; this.outbound = outbound; this.maxPending = maxPending;
         }
         void deliver(BridgeMessage message) {
+            ServerConnection carrier = carrierFor(serverId);
+            if (carrier == null) return;
             if (pending.size() >= maxPending || !reservePending()) {
                 logger.warn("LunaBridge global delivery queue full; dropping {} for {}", message.id(), serverId);
                 return;
@@ -171,7 +181,11 @@ final class VelocityNetworkAuthority {
             try {
                 byte[] encrypted = outbound.encode(ProtocolType.CHAT_DOWN, message.id(), BridgeMessageCodec.encode(message), 10_000);
                 byte[] packet = WirePacket.wrap(ProtocolType.CHAT_DOWN, encrypted);
-                connection.sendPluginMessage(LunaBridgeVelocityPlugin.CHANNEL, packet);
+                if (!carrier.sendPluginMessage(LunaBridgeVelocityPlugin.CHANNEL, packet)) {
+                    releasePending();
+                    logger.warn("LunaBridge has no active plugin-message carrier for {}", serverId);
+                    return;
+                }
                 pending.put(message.id(), new PendingFrame(packet, 0, clock.instant().plusSeconds(1), message.expiresAt()));
             } catch (ProtocolException rejected) {
                 releasePending();
@@ -184,7 +198,8 @@ final class VelocityNetworkAuthority {
                 Map.Entry<UUID, PendingFrame> entry = iterator.next(); PendingFrame frame = entry.getValue();
                 if (!frame.deadline.isAfter(now) || frame.attempt >= 2) { iterator.remove(); releasePending(); continue; }
                 if (!frame.dueAt.isAfter(now)) {
-                    connection.sendPluginMessage(LunaBridgeVelocityPlugin.CHANNEL, frame.bytes); // exact ciphertext/sequence replay.
+                    ServerConnection carrier = carrierFor(serverId);
+                    if (carrier == null || !carrier.sendPluginMessage(LunaBridgeVelocityPlugin.CHANNEL, frame.bytes)) continue;
                     entry.setValue(new PendingFrame(frame.bytes, frame.attempt + 1, now.plusSeconds(1L << frame.attempt), frame.deadline));
                 }
             }

@@ -2,6 +2,7 @@ package dev.lunabridge.core;
 
 import dev.lunabridge.core.config.ConfigMigration;
 import dev.lunabridge.core.delivery.BoundedDedupCache;
+import dev.lunabridge.core.delivery.BoundedDeliveryTracker;
 import dev.lunabridge.core.delivery.BoundedRetryQueue;
 import dev.lunabridge.core.model.BridgeChannelMapping;
 import dev.lunabridge.core.model.BridgeMessage;
@@ -33,6 +34,16 @@ class BridgeCoreTest {
                 assertThrows(ProtocolException.class, () -> BridgeMessageCodec.decode(trailing)).code());
     }
 
+    @Test void messageWireRejectsMalformedUtf8() {
+        UUID zero = new UUID(0, 0);
+        BridgeMessage message = new BridgeMessage(zero, zero, BridgeOrigin.MINECRAFT,
+                "a", "Global", zero, "Alice", "hello", "lobby", NOW, NOW.plusSeconds(10));
+        byte[] encoded = BridgeMessageCodec.encode(message);
+        encoded[37] = (byte) 0xC0; // first bridge-key byte after the fixed header and its length.
+        assertEquals(ProtocolException.Code.MALFORMED,
+                assertThrows(ProtocolException.class, () -> BridgeMessageCodec.decode(encoded)).code());
+    }
+
     @Test void dedupDoesNotEvictLiveRecordsToAdmitMoreWork() {
         BoundedDedupCache cache = new BoundedDedupCache(1, Duration.ofHours(1), CLOCK);
         UUID first = UUID.randomUUID();
@@ -48,11 +59,25 @@ class BridgeCoreTest {
         assertEquals(BoundedRetryQueue.Offer.EXPIRED, queue.offer(UUID.randomUUID(), "late", NOW));
     }
 
+    @Test void inboundDuplicatesAreAcknowledgedOnlyAfterDeliveryCompletes() {
+        BoundedDeliveryTracker tracker = new BoundedDeliveryTracker(1, Duration.ofSeconds(30), Duration.ofHours(1), CLOCK);
+        UUID id = UUID.randomUUID();
+        assertEquals(BoundedDeliveryTracker.Admission.NEW, tracker.begin(id));
+        assertEquals(BoundedDeliveryTracker.Admission.IN_PROGRESS, tracker.begin(id));
+        tracker.fail(id);
+        assertEquals(BoundedDeliveryTracker.Admission.NEW, tracker.begin(id));
+        assertTrue(tracker.complete(id));
+        assertEquals(BoundedDeliveryTracker.Admission.DELIVERED, tracker.begin(id));
+        assertEquals(BoundedDeliveryTracker.Admission.FULL, tracker.begin(UUID.randomUUID()));
+    }
+
     @Test void mappingsAreExplicitAndOneToOne() {
         BridgeChannelMapping mapping = new BridgeChannelMapping(Map.of("global", "Global"));
         assertEquals("global", mapping.bridgeKeyForLunaChannel("Global").orElseThrow());
         assertEquals("Global", mapping.lunaChannelForBridgeKey("global").orElseThrow());
         assertThrows(IllegalArgumentException.class, () -> new BridgeChannelMapping(Map.of("a", "Global", "b", "Global")));
+        assertThrows(IllegalArgumentException.class, () -> new BridgeChannelMapping(Map.of("Global", "Global")));
+        assertThrows(IllegalArgumentException.class, () -> new BridgeChannelMapping(Map.of("global", "界".repeat(43))));
     }
 
     @Test void migrationPreservesExistingValuesAndDoesNotDowngradeFutureSchema() {

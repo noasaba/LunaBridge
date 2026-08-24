@@ -33,7 +33,7 @@ public final class LunaBridgePaperPlugin extends JavaPlugin {
         getServer().getMessenger().registerOutgoingPluginChannel(this, PaperNetworkClient.CHANNEL);
         getServer().getMessenger().registerIncomingPluginChannel(this, PaperNetworkClient.CHANNEL, network);
         getServer().getPluginManager().registerEvents(adapter, this);
-        Bukkit.getScheduler().runTaskTimer(this, network::tick, 20L, 100L);
+        Bukkit.getScheduler().runTaskTimer(this, network::tick, 20L, 20L);
         getLogger().info("LunaBridge Paper enabled as a LunaChat observer; local chat is never intercepted.");
     }
 

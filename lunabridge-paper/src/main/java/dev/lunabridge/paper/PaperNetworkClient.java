@@ -17,6 +17,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -33,6 +34,7 @@ final class PaperNetworkClient implements PluginMessageListener {
     private SecureFrameCodec outbound;
     private SecureFrameCodec inbound;
     private boolean handshakeInFlight;
+    private Instant handshakeDeadline;
     private LunaChatAdapter adapter;
 
     PaperNetworkClient(JavaPlugin plugin, PaperSettings settings) {
@@ -56,7 +58,12 @@ final class PaperNetworkClient implements PluginMessageListener {
     }
 
     void tick() {
-        if (settings.velocityEnabled && outbound == null && pending.size() > 0) beginHandshake();
+        if (!settings.velocityEnabled) return;
+        if (outbound != null) { flushPending(); return; }
+        if (handshakeInFlight && handshakeDeadline != null && !handshakeDeadline.isAfter(clock.instant())) {
+            invalidate("handshake timed out");
+        }
+        if (pending.size() > 0) beginHandshake();
     }
 
     void close() {
@@ -65,6 +72,8 @@ final class PaperNetworkClient implements PluginMessageListener {
         inbound = null;
         clientState = null;
         challenge = null;
+        handshakeDeadline = null;
+        handshakeInFlight = false;
     }
 
     @Override
@@ -89,8 +98,10 @@ final class PaperNetworkClient implements PluginMessageListener {
         if (handshakeInFlight || secret == null || carrier() == null) return;
         clientState = HandshakeMessages.begin(settings.serverId, secret.keyForServer(settings.serverId), clock);
         handshakeInFlight = true;
+        handshakeDeadline = clock.instant().plusSeconds(5);
         if (!send(ProtocolType.HELLO, HandshakeMessages.encode(clientState.hello()))) {
             handshakeInFlight = false;
+            handshakeDeadline = null;
         }
     }
 
@@ -98,6 +109,7 @@ final class PaperNetworkClient implements PluginMessageListener {
         if (clientState == null || !handshakeInFlight) throw new ProtocolException(ProtocolException.Code.INVALID_SESSION, "unsolicited challenge");
         challenge = HandshakeMessages.decodeChallenge(payload);
         HandshakeMessages.Proof proof = HandshakeMessages.prove(clientState, challenge, clock);
+        handshakeDeadline = clock.instant().plusSeconds(5);
         if (!send(ProtocolType.PROOF, HandshakeMessages.encode(proof))) invalidate("no carrier for proof");
     }
 
@@ -109,7 +121,8 @@ final class PaperNetworkClient implements PluginMessageListener {
         inbound = new SecureFrameCodec(accepted.sessionId(), accepted.epoch(), keys, false, clock);
         keys.destroy();
         handshakeInFlight = false;
-        pending.takeDue().forEach(item -> publish(item.value()));
+        handshakeDeadline = null;
+        flushPending();
     }
 
     private void onInboundChat(byte[] encrypted) throws ProtocolException {
@@ -122,6 +135,7 @@ final class PaperNetworkClient implements PluginMessageListener {
     }
 
     private boolean sendSecure(ProtocolType outerType, UUID requestId, byte[] payload) {
+        if (outbound == null) return false;
         try {
             return send(outerType, outbound.encode(outerType, requestId, payload, 10_000));
         } catch (ProtocolException invalid) {
@@ -138,8 +152,15 @@ final class PaperNetworkClient implements PluginMessageListener {
     }
 
     private Player carrier() { return Bukkit.getOnlinePlayers().stream().findFirst().orElse(null); }
+    private void flushPending() {
+        for (BoundedRetryQueue.Item<BridgeMessage> item : pending.takeDue()) {
+            if (outbound != null && sendSecure(ProtocolType.CHAT_UP, item.id(), BridgeMessageCodec.encode(item.value()))) continue;
+            long delaySeconds = 1L << Math.min(item.attempt(), 4);
+            pending.retry(item, Duration.ofSeconds(delaySeconds));
+        }
+    }
     private void invalidate(String detail) {
         plugin.getLogger().warning("LunaBridge network session unavailable: " + detail);
-        outbound = null; inbound = null; challenge = null; clientState = null; handshakeInFlight = false;
+        outbound = null; inbound = null; challenge = null; clientState = null; handshakeInFlight = false; handshakeDeadline = null;
     }
 }

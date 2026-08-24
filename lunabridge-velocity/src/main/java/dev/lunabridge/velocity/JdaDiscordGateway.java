@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** JDA adapter: channel allowlist, no user-controlled mentions, and bounded asynchronous REST work. */
@@ -32,6 +33,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     private final Logger logger;
     private final Map<String, String> bridgeByDiscordChannel;
     private final AtomicInteger outboundInFlight = new AtomicInteger();
+    private final AtomicBoolean closed = new AtomicBoolean();
     private final List<PendingOutbound> pendingUntilReady = new ArrayList<>();
     private final JDA jda;
     private volatile boolean ready;
@@ -50,9 +52,10 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
             logger.info("LunaBridge Discord gateway disabled: no token configured.");
             return DiscordGateway.disabled();
         }
+        JDA jda = null;
         try {
             JdaDiscordGateway[] gateway = new JdaDiscordGateway[1];
-            JDA jda = JDABuilder.createDefault(settings.discordToken)
+            jda = JDABuilder.createDefault(settings.discordToken)
                     .setEnableShutdownHook(false)
                     .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
                     .addEventListeners(new ListenerAdapter() {
@@ -69,6 +72,8 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
             logger.info("LunaBridge Discord gateway started on Velocity as the sole JDA owner.");
             return result;
         } catch (RuntimeException failed) {
+            if (jda != null) try { jda.shutdownNow(); }
+            catch (RuntimeException cleanupFailed) { failed.addSuppressed(cleanupFailed); }
             logger.error("LunaBridge Discord gateway did not start; Minecraft/network chat remains available.", failed);
             return DiscordGateway.disabled();
         }
@@ -95,6 +100,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     }
 
     @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
         List<PendingOutbound> pending = clearPending();
         pending.forEach(ignored -> release());
         jda.shutdown();
@@ -124,19 +130,32 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
 
     private void handleSlash(SlashCommandInteractionEvent event) {
         if (!"players".equals(event.getName()) || !playersSlashEnabled(settings)) return;
-        event.reply(playersText()).setEphemeral(true).setAllowedMentions(Collections.emptySet()).queue();
+        if (!reserve()) return;
+        try {
+            event.reply(fitDiscordMessage(playersText())).setEphemeral(true).setAllowedMentions(Collections.emptySet())
+                    .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord slash response failed"); });
+        } catch (RuntimeException unavailable) {
+            release();
+            logger.warn("LunaBridge Discord slash response is unavailable.");
+        }
     }
 
     private void respond(MessageChannel channel, String text) {
         if (!reserve()) return;
-        channel.sendMessage(text).setAllowedMentions(Collections.emptySet()).mentionRepliedUser(false)
-                .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord response failed"); });
+        try {
+            channel.sendMessage(fitDiscordMessage(text)).setAllowedMentions(Collections.emptySet()).mentionRepliedUser(false)
+                    .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord response failed"); });
+        } catch (RuntimeException unavailable) {
+            release();
+            logger.warn("LunaBridge Discord response is unavailable.");
+        }
     }
 
     private void send(String channelId, String text, boolean allowConfiguredRole) {
-        String safe = allowConfiguredRole ? neutralizeExceptLeadingRole(text) : neutralizeMentions(text);
+        String safe = fitDiscordMessage(allowConfiguredRole ? neutralizeExceptLeadingRole(text) : neutralizeMentions(text));
         if (!reserve()) return;
         synchronized (pendingUntilReady) {
+            if (closed.get()) { release(); return; }
             if (!ready) {
                 pendingUntilReady.add(new PendingOutbound(channelId, safe, allowConfiguredRole));
                 return;
@@ -148,7 +167,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     private void markReady() {
         List<PendingOutbound> pending;
         synchronized (pendingUntilReady) {
-            if (ready) return;
+            if (ready || closed.get()) return;
             ready = true;
             pending = new ArrayList<>(pendingUntilReady);
             pendingUntilReady.clear();
@@ -166,6 +185,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     }
 
     private void dispatch(String channelId, String safe, boolean allowConfiguredRole) {
+        if (closed.get()) { release(); return; }
         MessageChannel channel = jda.getChannelById(MessageChannel.class, channelId);
         if (channel == null) {
             release();
@@ -182,7 +202,12 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         }
     }
 
-    private boolean reserve() { return outboundInFlight.incrementAndGet() <= MAX_OUTBOUND || releaseAndFalse(); }
+    private boolean reserve() {
+        if (closed.get()) return false;
+        int reserved = outboundInFlight.incrementAndGet();
+        if (reserved > MAX_OUTBOUND || closed.get()) return releaseAndFalse();
+        return true;
+    }
     private boolean releaseAndFalse() { outboundInFlight.decrementAndGet(); return false; }
     private void release() { outboundInFlight.decrementAndGet(); }
     private String playersText() {
@@ -210,5 +235,11 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     private static String neutralizeExceptLeadingRole(String text) {
         int end = text.indexOf('>');
         return end >= 0 ? text.substring(0, end + 1) + neutralizeMentions(text.substring(end + 1)) : neutralizeMentions(text);
+    }
+    static String fitDiscordMessage(String text) {
+        if (text.length() <= 2_000) return text;
+        int end = 1_999;
+        if (Character.isHighSurrogate(text.charAt(end - 1))) end--;
+        return text.substring(0, end) + "…";
     }
 }

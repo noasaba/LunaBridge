@@ -12,6 +12,7 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.scheduler.ScheduledTask;
 import org.slf4j.Logger;
 
 import java.io.IOException;
@@ -34,6 +35,8 @@ public final class LunaBridgeVelocityPlugin {
     private DiscordGateway discord = DiscordGateway.disabled();
     private SeenPlayerStore seenPlayers;
     private VelocitySettings settings;
+    private ScheduledTask tickTask;
+    private boolean channelRegistered;
 
     @Inject
     public LunaBridgeVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -49,10 +52,12 @@ public final class LunaBridgeVelocityPlugin {
             discord = JdaDiscordGateway.start(authority, settings, logger);
             authority.attachDiscord(discord);
             proxy.getChannelRegistrar().register(CHANNEL);
-            proxy.getScheduler().buildTask(this, authority::tick).repeat(Duration.ofSeconds(1)).schedule();
+            channelRegistered = true;
+            tickTask = proxy.getScheduler().buildTask(this, authority::tick).repeat(Duration.ofSeconds(1)).schedule();
             discord.notification("startup", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
             logger.info("LunaBridge Velocity enabled as network authority.");
         } catch (IOException | RuntimeException failure) {
+            cleanup();
             logger.error("LunaBridge Velocity did not start; no insecure fallback will be enabled.", failure);
         }
     }
@@ -99,11 +104,23 @@ public final class LunaBridgeVelocityPlugin {
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
         discord.notification("shutdown", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
-        discord.close();
-        if (authority != null) authority.close();
-        proxy.getChannelRegistrar().unregister(CHANNEL);
+        cleanup();
+    }
+
+    private void cleanup() {
+        if (tickTask != null) try { tickTask.cancel(); }
+        catch (RuntimeException failed) { logger.warn("LunaBridge scheduler cleanup failed", failed); }
+        tickTask = null;
+        try { discord.close(); }
+        catch (RuntimeException failed) { logger.warn("LunaBridge Discord cleanup failed", failed); }
+        if (authority != null) try { authority.close(); }
+        catch (RuntimeException failed) { logger.warn("LunaBridge network cleanup failed", failed); }
+        if (channelRegistered) try { proxy.getChannelRegistrar().unregister(CHANNEL); }
+        catch (RuntimeException failed) { logger.warn("LunaBridge channel cleanup failed", failed); }
+        channelRegistered = false;
         authority = null;
         discord = DiscordGateway.disabled();
+        seenPlayers = null;
         settings = null;
     }
 

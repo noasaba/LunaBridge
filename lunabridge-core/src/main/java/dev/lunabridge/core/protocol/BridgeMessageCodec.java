@@ -53,7 +53,7 @@ public final class BridgeMessageCodec {
     private static String string(DataInputStream in, int maxBytes) throws IOException {
         int length = in.readUnsignedShort(); if (length > maxBytes) throw new IOException("string too long");
         byte[] bytes = in.readNBytes(length); if (bytes.length != length) throw new IOException("truncated string");
-        return new String(bytes, StandardCharsets.UTF_8);
+        return StrictUtf8.decode(bytes);
     }
     private static void uuid(DataOutputStream out, UUID id) throws IOException { out.writeLong(id.getMostSignificantBits()); out.writeLong(id.getLeastSignificantBits()); }
     private static UUID uuid(DataInputStream in) throws IOException { return new UUID(in.readLong(), in.readLong()); }

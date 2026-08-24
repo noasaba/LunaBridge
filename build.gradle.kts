@@ -3,10 +3,10 @@ import org.gradle.api.tasks.compile.JavaCompile
 import org.gradle.api.tasks.testing.Test
 import org.gradle.jvm.toolchain.JavaLanguageVersion
 
-val javaToolchainVersion: String by project
-val paperJavaVersion: String by project
-val velocityJavaVersion: String by project
-val junitVersion: String by project
+val javaToolchainVersion = project.property("javaToolchainVersion").toString()
+val paperJavaVersion = project.property("paperJavaVersion").toString()
+val velocityJavaVersion = project.property("velocityJavaVersion").toString()
+val junitVersion = project.property("junitVersion").toString()
 
 allprojects {
     group = providers.gradleProperty("projectGroup").get()

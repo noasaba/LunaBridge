@@ -44,4 +44,18 @@ class VelocityPersistenceTest {
         assertEquals("✅ Server started", VelocitySettings.load(temporaryDirectory).properties
                 .getProperty("discord.notifications.startup"));
     }
+
+    @Test void corruptEpochFailsClosedWithoutOverwritingEvidence() throws Exception {
+        Path epoch = temporaryDirectory.resolve("network-epoch");
+        Files.writeString(epoch, "not-a-number");
+        assertThrows(java.io.IOException.class, () -> EpochStore.next(temporaryDirectory));
+        assertEquals("not-a-number", Files.readString(epoch));
+    }
+
+    @Test void discordMessagesAreBoundedWithoutSplittingSurrogates() {
+        String fitted = JdaDiscordGateway.fitDiscordMessage("a".repeat(1_998) + "😀" + "tail");
+        assertTrue(fitted.length() <= 2_000);
+        assertTrue(fitted.endsWith("…"));
+        assertFalse(Character.isHighSurrogate(fitted.charAt(fitted.length() - 2)));
+    }
 }

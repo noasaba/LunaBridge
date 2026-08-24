@@ -3,8 +3,9 @@ plugins {
     id("com.gradleup.shadow") version "9.2.2"
 }
 
-val velocityApiVersion: String by project
-val jdaVersion: String by project
+val velocityApiVersion = project.property("velocityApiVersion").toString()
+val jdaVersion = project.property("jdaVersion").toString()
+val pluginVersion = version.toString()
 
 repositories {
     mavenCentral()
@@ -20,8 +21,8 @@ dependencies {
 }
 
 tasks.processResources {
-    inputs.property("version", project.version)
-    filesMatching("velocity-plugin.json") { expand("version" to project.version) }
+    inputs.property("version", pluginVersion)
+    filesMatching("velocity-plugin.json") { expand("version" to pluginVersion) }
 }
 
 tasks.shadowJar {
