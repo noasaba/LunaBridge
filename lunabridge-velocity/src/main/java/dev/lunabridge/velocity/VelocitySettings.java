@@ -8,6 +8,7 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -35,7 +36,7 @@ final class VelocitySettings {
             Files.copy(defaults, file);
         }
         Properties properties = new Properties();
-        try (InputStream input = Files.newInputStream(file)) { properties.load(input); }
+        try (var input = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { properties.load(input); }
         Map<String, String> schema = new LinkedHashMap<>();
         for (String key : new String[] {"config-version", "network.velocity", "network.shared-pass", "limits.network-outbox", "limits.dedup-entries"}) {
             schema.put(key, properties.getProperty(key, ""));

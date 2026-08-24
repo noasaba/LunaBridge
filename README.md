@@ -17,7 +17,7 @@ The one required bridge mapping is stable bridge key → LunaChat channel name, 
 ./gradlew assemble
 ```
 
-Build toolchain: Java 25; Paper/core bytecode: Java 21; Velocity bytecode: Java 25. The build uses Paper API `1.21.1-R0.1-SNAPSHOT`, Velocity API `4.1.0-SNAPSHOT`, JDA `6.4.1`, Gradle `9.6.1`, and the official LunaChat `3.0.16` artifact as an unbundled `compileOnly` dependency.
+Build toolchain and bytecode target: Java 25. The build uses Paper API `26.2.build.117-stable`, Velocity API `4.1.0-SNAPSHOT`, JDA `6.4.1`, Gradle `9.6.1`, and the official LunaChat `3.0.16` artifact as an unbundled `compileOnly` dependency.
 
 The old LunaChat POM has unavailable historical bStats transitive dependencies. LunaBridge explicitly resolves its official artifact non-transitively because it calls only the public LunaChat API; the generated LunaBridge JAR never embeds LunaChat.
 

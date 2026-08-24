@@ -8,6 +8,7 @@ import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.build.Commands;
 import net.dv8tion.jda.api.requests.GatewayIntent;
@@ -15,8 +16,10 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -29,7 +32,11 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     private final Logger logger;
     private final Map<String, String> bridgeByDiscordChannel;
     private final AtomicInteger outboundInFlight = new AtomicInteger();
+    private final List<PendingOutbound> pendingUntilReady = new ArrayList<>();
     private final JDA jda;
+    private volatile boolean ready;
+
+    private record PendingOutbound(String channelId, String text, boolean allowConfiguredRole) { }
 
     private JdaDiscordGateway(VelocityNetworkAuthority authority, VelocitySettings settings, Logger logger, JDA jda) {
         this.authority = authority; this.settings = settings; this.logger = logger; this.jda = jda;
@@ -45,8 +52,9 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         }
         try {
             JdaDiscordGateway[] gateway = new JdaDiscordGateway[1];
-            JDA jda = JDABuilder.createLight(settings.discordToken)
-                    .enableIntents(GatewayIntent.MESSAGE_CONTENT)
+            JDA jda = JDABuilder.createDefault(settings.discordToken)
+                    .setEnableShutdownHook(false)
+                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
                     .addEventListeners(new ListenerAdapter() {
                         @Override public void onMessageReceived(@NotNull MessageReceivedEvent event) { if (gateway[0] != null) gateway[0].handleMessage(event); }
                         @Override public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) { if (gateway[0] != null) gateway[0].handleSlash(event); }
@@ -54,6 +62,8 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
                     .build();
             JdaDiscordGateway result = new JdaDiscordGateway(authority, settings, logger, jda);
             gateway[0] = result;
+            jda.addEventListener(result);
+            if (jda.getStatus() == JDA.Status.CONNECTED) result.markReady();
             if (playersSlashEnabled(settings)) jda.upsertCommand(Commands.slash("players", "Show online Minecraft players")).queue(
                     ignored -> { }, error -> logger.warn("Could not register LunaBridge /players command"));
             logger.info("LunaBridge Discord gateway started on Velocity as the sole JDA owner.");
@@ -84,7 +94,13 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         send(channelId, text, allowRole);
     }
 
-    @Override public void close() { jda.shutdown(); }
+    @Override public void close() {
+        List<PendingOutbound> pending = clearPending();
+        pending.forEach(ignored -> release());
+        jda.shutdown();
+    }
+
+    @Override public void onReady(@NotNull ReadyEvent event) { markReady(); }
 
     private void handleMessage(MessageReceivedEvent event) {
         if (event.getAuthor().isBot() || event.isWebhookMessage()) return;
@@ -118,12 +134,52 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     }
 
     private void send(String channelId, String text, boolean allowConfiguredRole) {
-        MessageChannel channel = jda.getChannelById(MessageChannel.class, channelId);
-        if (channel == null || !reserve()) return;
         String safe = allowConfiguredRole ? neutralizeExceptLeadingRole(text) : neutralizeMentions(text);
+        if (!reserve()) return;
+        synchronized (pendingUntilReady) {
+            if (!ready) {
+                pendingUntilReady.add(new PendingOutbound(channelId, safe, allowConfiguredRole));
+                return;
+            }
+        }
+        dispatch(channelId, safe, allowConfiguredRole);
+    }
+
+    private void markReady() {
+        List<PendingOutbound> pending;
+        synchronized (pendingUntilReady) {
+            if (ready) return;
+            ready = true;
+            pending = new ArrayList<>(pendingUntilReady);
+            pendingUntilReady.clear();
+        }
+        logger.info("LunaBridge Discord gateway ready; flushing {} queued delivery attempt(s).", pending.size());
+        pending.forEach(outbound -> dispatch(outbound.channelId(), outbound.text(), outbound.allowConfiguredRole()));
+    }
+
+    private List<PendingOutbound> clearPending() {
+        synchronized (pendingUntilReady) {
+            List<PendingOutbound> pending = new ArrayList<>(pendingUntilReady);
+            pendingUntilReady.clear();
+            return pending;
+        }
+    }
+
+    private void dispatch(String channelId, String safe, boolean allowConfiguredRole) {
+        MessageChannel channel = jda.getChannelById(MessageChannel.class, channelId);
+        if (channel == null) {
+            release();
+            logger.warn("LunaBridge Discord channel {} is unavailable after gateway readiness.", channelId);
+            return;
+        }
         var action = channel.sendMessage(safe).mentionRepliedUser(false);
-        action.setAllowedMentions(allowConfiguredRole ? Collections.singleton(Message.MentionType.ROLE) : Collections.emptySet())
-                .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord delivery failed"); });
+        try {
+            action.setAllowedMentions(allowConfiguredRole ? Collections.singleton(Message.MentionType.ROLE) : Collections.emptySet())
+                    .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord delivery failed"); });
+        } catch (RuntimeException unavailable) {
+            release();
+            logger.warn("LunaBridge Discord delivery is unavailable; Minecraft/network chat remains available.");
+        }
     }
 
     private boolean reserve() { return outboundInFlight.incrementAndGet() <= MAX_OUTBOUND || releaseAndFalse(); }

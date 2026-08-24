@@ -5,6 +5,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -34,5 +35,13 @@ class VelocityPersistenceTest {
         settings.properties.setProperty("discord.commands.players.mode", "text");
         assertTrue(JdaDiscordGateway.textPlayersEnabled(settings));
         assertFalse(JdaDiscordGateway.playersSlashEnabled(settings));
+    }
+
+    @Test void utf8NotificationTemplatesArePreserved() throws Exception {
+        Files.writeString(temporaryDirectory.resolve("config.properties"),
+                "config-version=1\nnetwork.shared-pass=a-long-enough-isolated-test-passphrase\n"
+                        + "discord.notifications.startup=✅ Server started\n", StandardCharsets.UTF_8);
+        assertEquals("✅ Server started", VelocitySettings.load(temporaryDirectory).properties
+                .getProperty("discord.notifications.startup"));
     }
 }
