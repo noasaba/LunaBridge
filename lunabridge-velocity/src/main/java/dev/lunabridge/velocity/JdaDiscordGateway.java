@@ -133,8 +133,15 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         var players = authority.onlinePlayerNames();
         return players.isEmpty() ? "No players online." : "Online (" + players.size() + "): " + String.join(", ", players);
     }
-    private static boolean textPlayersEnabled(VelocitySettings settings) { return Boolean.parseBoolean(settings.properties.getProperty("discord.text-commands.enabled", "true")) && mode(settings).contains("text"); }
-    private static boolean playersSlashEnabled(VelocitySettings settings) { return mode(settings).contains("slash"); }
+    static boolean textPlayersEnabled(VelocitySettings settings) {
+        String mode = mode(settings);
+        return Boolean.parseBoolean(settings.properties.getProperty("discord.text-commands.enabled", "true"))
+                && ("text".equals(mode) || "both".equals(mode));
+    }
+    static boolean playersSlashEnabled(VelocitySettings settings) {
+        String mode = mode(settings);
+        return "slash".equals(mode) || "both".equals(mode);
+    }
     private static String mode(VelocitySettings settings) { return settings.properties.getProperty("discord.commands.players.mode", "both").toLowerCase(); }
     private static String format(String template, Map<String, String> placeholders) {
         String result = template;

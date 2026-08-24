@@ -33,6 +33,7 @@ public final class LunaBridgeVelocityPlugin {
     private VelocityNetworkAuthority authority;
     private DiscordGateway discord = DiscordGateway.disabled();
     private SeenPlayerStore seenPlayers;
+    private VelocitySettings settings;
 
     @Inject
     public LunaBridgeVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -42,7 +43,7 @@ public final class LunaBridgeVelocityPlugin {
     @Subscribe
     public void onInitialize(ProxyInitializeEvent event) {
         try {
-            VelocitySettings settings = VelocitySettings.load(dataDirectory);
+            settings = VelocitySettings.load(dataDirectory);
             authority = new VelocityNetworkAuthority(proxy, logger, settings, EpochStore.next(dataDirectory));
             seenPlayers = new SeenPlayerStore(dataDirectory);
             discord = JdaDiscordGateway.start(authority, settings, logger);
@@ -75,9 +76,11 @@ public final class LunaBridgeVelocityPlugin {
         Map<String, String> placeholders = placeholders(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", to);
         if (event.getPreviousServer().isEmpty()) {
             connectedPlayers.add(event.getPlayer().getUniqueId());
-            if (seenPlayers != null && seenPlayers.markFirst(event.getPlayer().getUniqueId())) discord.notification("first-login", placeholders);
-            else {
+            if (seenPlayers != null && seenPlayers.markFirst(event.getPlayer().getUniqueId()) && notificationEnabled("first-login")) {
+                discord.notification("first-login", placeholders);
+            } else if (notificationEnabled("login")) {
                 discord.notification("login", placeholders);
+            } else {
                 discord.notification("join", placeholders);
             }
             return;
@@ -101,10 +104,14 @@ public final class LunaBridgeVelocityPlugin {
         proxy.getChannelRegistrar().unregister(CHANNEL);
         authority = null;
         discord = DiscordGateway.disabled();
+        settings = null;
     }
 
     private Map<String, String> placeholders(String player, UUID uuid, String from, String to) {
         return Map.of("player", player, "uuid", uuid.toString(), "server", to, "fromServer", from, "toServer", to,
                 "online", Integer.toString(proxy.getPlayerCount()), "max", "?");
+    }
+    private boolean notificationEnabled(String type) {
+        return settings != null && Boolean.parseBoolean(settings.properties.getProperty("discord.notifications.enable." + type, "true"));
     }
 }

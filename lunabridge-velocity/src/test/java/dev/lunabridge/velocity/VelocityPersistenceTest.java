@@ -26,4 +26,13 @@ class VelocityPersistenceTest {
         assertThrows(IllegalStateException.class, () -> VelocitySettings.load(temporaryDirectory));
         assertTrue(Files.readString(temporaryDirectory.resolve("config.properties")).contains("config-version=99"));
     }
+
+    @Test void defaultBothPlayersModeEnablesTextAndSlashCommands() throws Exception {
+        VelocitySettings settings = VelocitySettings.load(temporaryDirectory);
+        assertTrue(JdaDiscordGateway.textPlayersEnabled(settings));
+        assertTrue(JdaDiscordGateway.playersSlashEnabled(settings));
+        settings.properties.setProperty("discord.commands.players.mode", "text");
+        assertTrue(JdaDiscordGateway.textPlayersEnabled(settings));
+        assertFalse(JdaDiscordGateway.playersSlashEnabled(settings));
+    }
 }
