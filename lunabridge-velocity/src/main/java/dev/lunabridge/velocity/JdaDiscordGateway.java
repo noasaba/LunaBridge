@@ -1,6 +1,8 @@
 package dev.lunabridge.velocity;
 
-import dev.lunabridge.core.model.BridgeMessage;
+import com.velocitypowered.api.proxy.ProxyServer;
+import dev.lunachat.api.LunaChatIntegrationApi;
+import dev.lunachat.api.LunaChatIntegrationApi.AcceptedMessage;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
@@ -26,7 +28,8 @@ import java.time.Duration;
 /** JDA adapter: channel allowlist, no user-controlled mentions, and bounded asynchronous REST work. */
 final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway {
     private static final int MAX_OUTBOUND = 256;
-    private final VelocityNetworkAuthority authority;
+    private final LunaChatIntegrationApi lunaChat;
+    private final ProxyServer proxy;
     private final VelocitySettings settings;
     private final Logger logger;
     private final Map<String, String> bridgeByDiscordChannel;
@@ -39,14 +42,14 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
 
     private record PendingOutbound(String channelId, String text, boolean allowConfiguredRole) { }
 
-    private JdaDiscordGateway(VelocityNetworkAuthority authority, VelocitySettings settings, Logger logger, JDA jda) {
-        this.authority = authority; this.settings = settings; this.logger = logger; this.jda = jda;
+    private JdaDiscordGateway(LunaChatIntegrationApi lunaChat, ProxyServer proxy, VelocitySettings settings, Logger logger, JDA jda) {
+        this.lunaChat = lunaChat; this.proxy = proxy; this.settings = settings; this.logger = logger; this.jda = jda;
         Map<String, String> reverse = new HashMap<>();
         settings.discordChannels.forEach((bridge, channelId) -> reverse.put(channelId, bridge));
         this.bridgeByDiscordChannel = Map.copyOf(reverse);
     }
 
-    static DiscordGateway start(VelocityNetworkAuthority authority, VelocitySettings settings, Logger logger) {
+    static DiscordGateway start(LunaChatIntegrationApi lunaChat, ProxyServer proxy, VelocitySettings settings, Logger logger) {
         if (settings.discordToken.isBlank() || settings.discordToken.equals("PUT_DISCORD_BOT_TOKEN_HERE")) {
             logger.info("LunaBridge Discord gateway disabled: no token configured.");
             return DiscordGateway.disabled();
@@ -62,7 +65,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
                         @Override public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) { if (gateway[0] != null) gateway[0].handleSlash(event); }
                     })
                     .build();
-            JdaDiscordGateway result = new JdaDiscordGateway(authority, settings, logger, jda);
+            JdaDiscordGateway result = new JdaDiscordGateway(lunaChat, proxy, settings, logger, jda);
             gateway[0] = result;
             jda.addEventListener(result);
             if (jda.getStatus() == JDA.Status.CONNECTED) result.markReady();
@@ -78,10 +81,11 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         }
     }
 
-    @Override public void relayMinecraft(BridgeMessage message) {
-        String channelId = settings.discordChannels.get(message.bridgeChannel());
+    @Override public void relayMinecraft(AcceptedMessage message) {
+        if (message.origin().kind() != LunaChatIntegrationApi.OriginKind.MINECRAFT) return;
+        String channelId = settings.discordChannels.get(message.channelId().value());
         if (channelId == null) return;
-        send(channelId, "[" + message.lunaChannelName() + "] " + message.authorName() + ": " + message.content(), false);
+        send(channelId, "[" + message.channelName() + "] " + authorName(message) + ": " + message.content(), false);
     }
 
     @Override public void notification(String type, Map<String, String> placeholders) {
@@ -125,7 +129,17 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         }
         String author = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
         try {
-            authority.routeDiscordInbound(bridge, author, content);
+            var request = new LunaChatIntegrationApi.ExternalMessageRequest(
+                    new LunaChatIntegrationApi.ChannelId(bridge),
+                    new LunaChatIntegrationApi.ExternalMessageIdentity("lunabridge:discord", event.getMessageId()),
+                    new LunaChatIntegrationApi.ExternalAuthor("discord", event.getAuthor().getId(), author),
+                    content, java.time.Instant.now(), Duration.ofSeconds(10));
+            lunaChat.publishExternal(request).whenComplete((result, failure) -> {
+                if (failure != null) logger.warn("LunaBridge Discord ingress failed", failure);
+                else if (result.status() != LunaChatIntegrationApi.PublishStatus.ACCEPTED
+                        && result.status() != LunaChatIntegrationApi.PublishStatus.DUPLICATE)
+                    logger.warn("LunaBridge Discord ingress rejected: {} ({})", result.status(), result.diagnosticCode());
+            });
         } catch (IllegalArgumentException invalid) {
             logger.warn("Rejected invalid Discord bridge message: {}", invalid.getMessage());
         }
@@ -234,7 +248,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         }
     }
     private String playersText() {
-        var players = authority.onlinePlayerNames();
+        var players = proxy.getAllPlayers().stream().map(player -> player.getUsername()).sorted().toList();
         return players.isEmpty() ? "No players online." : "Online (" + players.size() + "): " + String.join(", ", players);
     }
     static boolean textPlayersEnabled(VelocitySettings settings) {
@@ -267,5 +281,13 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         int end = 1_999;
         if (Character.isHighSurrogate(text.charAt(end - 1))) end--;
         return text.substring(0, end) + "…";
+    }
+
+    private static String authorName(AcceptedMessage message) {
+        return switch (message.author()) {
+            case LunaChatIntegrationApi.PlayerAuthor player -> player.displayName();
+            case LunaChatIntegrationApi.ExternalAuthor external -> external.displayName();
+            case LunaChatIntegrationApi.SystemAuthor system -> system.name();
+        };
     }
 }

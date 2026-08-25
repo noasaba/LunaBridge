@@ -24,6 +24,8 @@ The old LunaChat POM has unavailable historical bStats transitive dependencies. 
 ## Design documents
 
 - [Architecture and authority boundaries](docs/ARCHITECTURE.md)
+- [LunaChat fork API redesign handoff prompt](docs/LUNACHAT_API_HANDOFF_PROMPT.md)
+- [Post-fork LunaBridge direction and code recovery](docs/BRIDGE_POST_FORK_DIRECTION.md)
 - [Security and delivery semantics](docs/SECURITY_AND_DELIVERY.md)
 - [Operations, migration, and compatibility scope](docs/OPERATIONS.md)
 - [Test strategy and optional process E2E lane](docs/TESTING.md)

@@ -18,10 +18,12 @@ repositories {
 
 dependencies {
     implementation(project(":lunabridge-core"))
+    compileOnly(project(":lunachat-integration-api"))
     compileOnly("com.velocitypowered:velocity-api:$velocityApiVersion")
     annotationProcessor("com.velocitypowered:velocity-api:$velocityApiVersion")
     implementation("net.dv8tion:JDA:$jdaVersion")
     testImplementation("com.velocitypowered:velocity-api:$velocityApiVersion")
+    testImplementation(project(":lunachat-integration-api"))
 }
 
 sourceSets.main {
