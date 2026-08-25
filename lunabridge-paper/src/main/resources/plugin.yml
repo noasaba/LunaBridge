@@ -1,7 +1,15 @@
-name: LunaBridge-Paper
+name: LunaBridge-Paper-Standalone
 main: dev.lunabridge.paper.LunaBridgePaperPlugin
 version: ${version}
 api-version: '26.2'
-description: Secure LunaChat network and Discord bridge client
+description: Discord integration for LunaChat standalone authority
 author: LunaBridge
-softdepend: [LunaChat]
+depend: [LunaChat]
+commands:
+  lunabridge:
+    description: Configure and diagnose LunaBridge
+    usage: /lunabridge <setup|doctor>
+    permission: lunabridge.admin
+permissions:
+  lunabridge.admin:
+    default: op

@@ -1,0 +1,323 @@
+package dev.lunabridge.discord;
+
+import com.github.ucchyocean.lunachat.api.AcceptedMessage;
+import com.github.ucchyocean.lunachat.api.ExternalMessageRequest;
+import com.github.ucchyocean.lunachat.api.LunaChatIntegrationApi;
+import com.github.ucchyocean.lunachat.api.MessageAuthor;
+import com.github.ucchyocean.lunachat.api.OriginKind;
+import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.JDABuilder;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.session.ReadyEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.build.Commands;
+import net.dv8tion.jda.api.requests.GatewayIntent;
+import org.jetbrains.annotations.NotNull;
+import org.slf4j.Logger;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/** Common Discord lifecycle and conversion layer shared by Paper standalone and Velocity. */
+public final class DiscordConnector implements AutoCloseable {
+    private static final int MAX_OUTBOUND = 256;
+    private static final int MAX_PUBLISH_PENDING = 256;
+    private static final int MAX_PUBLISH_ATTEMPTS = 5;
+
+    private final LunaChatIntegrationApi lunaChat;
+    private final PlayerDirectory players;
+    private volatile DiscordSettings settings;
+    private final Logger logger;
+    private volatile Map<String, String> lunaChannelToDiscordChannel;
+    private final MessageReceiptCache receipts = new MessageReceiptCache(4_096, Duration.ofHours(24), Clock.systemUTC());
+    private final AtomicInteger outboundInFlight = new AtomicInteger();
+    private final AtomicBoolean closed = new AtomicBoolean();
+    private final Object completionMonitor = new Object();
+    private final List<PendingOutbound> pendingUntilReady = new ArrayList<>();
+    private final ScheduledExecutorService retryExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "lunabridge-discord-retry");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final BoundedPublishRetryQueue publishRetries;
+    private final JDA jda;
+    private volatile boolean ready;
+
+    private record PendingOutbound(String channelId, String text, boolean allowConfiguredRole) { }
+
+    private DiscordConnector(LunaChatIntegrationApi lunaChat, PlayerDirectory players, DiscordSettings settings,
+                             Logger logger, JDA jda) {
+        this.lunaChat = lunaChat;
+        this.players = players;
+        this.settings = settings;
+        this.logger = logger;
+        this.jda = jda;
+        this.lunaChannelToDiscordChannel = reverseMappings(settings);
+        this.publishRetries = new BoundedPublishRetryQueue(MAX_PUBLISH_PENDING, MAX_PUBLISH_ATTEMPTS,
+                request -> lunaChat.messages().publishExternal(request), retryExecutor, Clock.systemUTC());
+    }
+
+    public static DiscordConnector start(LunaChatIntegrationApi lunaChat, PlayerDirectory players,
+                                          DiscordSettings settings, Logger logger) {
+        if (settings.token().isBlank() || settings.token().equals("PUT_DISCORD_BOT_TOKEN_HERE")) {
+            logger.info("LunaBridge Discord gateway disabled: no token configured.");
+            return disabled(lunaChat, players, settings, logger);
+        }
+        JDA jda = null;
+        try {
+            jda = JDABuilder.createDefault(settings.token())
+                    .setEnableShutdownHook(false)
+                    .enableIntents(GatewayIntent.GUILD_MESSAGES, GatewayIntent.MESSAGE_CONTENT)
+                    .build();
+            DiscordConnector result = new DiscordConnector(lunaChat, players, settings, logger, jda);
+            DiscordConnector listenerTarget = result;
+            jda.addEventListener(new ListenerAdapter() {
+                @Override public void onReady(@NotNull ReadyEvent event) { listenerTarget.markReady(); }
+                @Override public void onMessageReceived(@NotNull MessageReceivedEvent event) { listenerTarget.handleMessage(event); }
+                @Override public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) { listenerTarget.handleSlash(event); }
+            });
+            if (jda.getStatus() == JDA.Status.CONNECTED) result.markReady();
+            if (playersSlashEnabled(settings)) jda.upsertCommand(Commands.slash("players", "Show online Minecraft players"))
+                    .queue(ignored -> { }, error -> logger.warn("Could not register LunaBridge /players command"));
+            logger.info("LunaBridge Discord gateway started as the platform-independent connector.");
+            return result;
+        } catch (RuntimeException failed) {
+            if (jda != null) try { jda.shutdownNow(); } catch (RuntimeException cleanupFailed) { failed.addSuppressed(cleanupFailed); }
+            logger.error("LunaBridge Discord gateway did not start; LunaChat remains available.", failed);
+            return disabled(lunaChat, players, settings, logger);
+        }
+    }
+
+    private static DiscordConnector disabled(LunaChatIntegrationApi api, PlayerDirectory players,
+                                             DiscordSettings settings, Logger logger) {
+        return new DiscordConnector(api, players, settings, logger, null);
+    }
+
+    public void reconfigure(DiscordSettings updated) {
+        if (!settings.token().equals(updated.token())) {
+            throw new IllegalArgumentException("Discord token changes require a plugin restart");
+        }
+        settings = updated;
+        lunaChannelToDiscordChannel = reverseMappings(updated);
+    }
+
+    public boolean hasGateway() { return jda != null && !closed.get(); }
+
+    public boolean isReady() { return ready && !closed.get(); }
+
+    public boolean sendSetupTest(String discordChannelId, String channelName) {
+        if (!hasGateway()) return false;
+        send("✅ LunaBridge mapped this Discord channel to LunaChat "
+                + DiscordText.suppressMentions(channelName) + ".", discordChannelId, false);
+        return true;
+    }
+
+    public void relayMinecraft(AcceptedMessage message) {
+        if (closed.get() || message.origin().kind() != OriginKind.MINECRAFT) return;
+        String channelId = lunaChannelToDiscordChannel.get(message.channelId().value());
+        if (channelId == null || !receipts.markIfNew(message.messageId())) return;
+        send(DiscordText.suppressMentions(minecraftRelayText(message)), channelId, false);
+    }
+
+    static String minecraftRelayText(AcceptedMessage message) {
+        String channelName = DiscordText.stripMinecraftLegacyFormatting(message.channelName());
+        String author = DiscordText.stripMinecraftLegacyFormatting(authorName(message));
+        String content = DiscordText.stripMinecraftLegacyFormatting(message.content());
+        return "[" + channelName + "] " + author + ": " + content;
+    }
+
+    public void notification(String type, Map<String, String> placeholders) {
+        if (closed.get() || !Boolean.parseBoolean(settings.option("discord.notifications.enable." + type, "true"))) return;
+        String template = settings.option("discord.notifications." + type, "");
+        if (template.isBlank()) return;
+        String channelId = settings.option("discord.notifications." + type + "-channel-id",
+                settings.option("discord.notifications.channel-id", "")).trim();
+        if (!channelId.matches("[0-9]{5,32}")) return;
+        String roleId = "first-login".equals(type)
+                ? settings.option("discord.notifications.first-login-role-id", "").trim() : "";
+        boolean allowRole = roleId.matches("[0-9]{5,32}");
+        String text = format(template, placeholders);
+        if (allowRole) text = "<@&" + roleId + "> " + text;
+        send(allowRole ? DiscordText.suppressMentionsExceptLeadingRole(text) : DiscordText.suppressMentions(text),
+                channelId, allowRole);
+    }
+
+    public void finalNotification(String type, Map<String, String> placeholders) {
+        notification(type, placeholders);
+        awaitOutbound(Duration.ofSeconds(3));
+        close();
+    }
+
+    @Override public void close() {
+        if (!closed.compareAndSet(false, true)) return;
+        pendingUntilReady().forEach(ignored -> release());
+        publishRetries.close();
+        if (jda != null) jda.shutdown();
+    }
+
+    private void handleMessage(MessageReceivedEvent event) {
+        if (closed.get() || event.getAuthor().isBot() || event.isWebhookMessage()) return;
+        String lunaChannelId = settings.discordChannelToLunaChatChannelId().get(event.getChannel().getId());
+        if (lunaChannelId == null) return;
+        String content = DiscordText.fit(event.getMessage().getContentDisplay());
+        if (settings.option("discord.commands.players.text-trigger", "!p").equals(content.trim())
+                && textPlayersEnabled(settings)) {
+            respond(event.getChannel(), playersText());
+            return;
+        }
+        String displayName = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
+        try {
+            ExternalMessageRequest request = new ExternalMessageRequest(
+                    new com.github.ucchyocean.lunachat.api.ChannelId(lunaChannelId),
+                    new com.github.ucchyocean.lunachat.api.ExternalMessageIdentity("lunabridge:discord", event.getMessageId()),
+                    new MessageAuthor.External("lunabridge:discord", event.getAuthor().getId(), displayName),
+                    content, Instant.now(), Duration.ofMinutes(5));
+            if (!publishRetries.submit(request)) logger.warn("LunaBridge Discord publish queue is full or closing");
+        } catch (IllegalArgumentException invalid) {
+            logger.warn("Rejected invalid Discord bridge message: {}", invalid.getMessage());
+        }
+    }
+
+    private void handleSlash(SlashCommandInteractionEvent event) {
+        if (!"players".equals(event.getName()) || !playersSlashEnabled(settings)
+                || !isAllowedCommandChannel(settings, event.getChannel().getId())) return;
+        if (!reserve()) return;
+        try {
+            event.reply(DiscordText.fit(playersText())).setEphemeral(true).setAllowedMentions(Collections.emptySet())
+                    .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord slash response failed"); });
+        } catch (RuntimeException unavailable) { release(); logger.warn("LunaBridge Discord slash response unavailable"); }
+    }
+
+    private void respond(MessageChannel channel, String text) {
+        if (!reserve()) return;
+        try {
+            channel.sendMessage(DiscordText.fit(DiscordText.suppressMentions(text))).setAllowedMentions(Collections.emptySet())
+                    .mentionRepliedUser(false).queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord response failed"); });
+        } catch (RuntimeException unavailable) { release(); logger.warn("LunaBridge Discord response unavailable"); }
+    }
+
+    private void send(String text, String channelId, boolean allowConfiguredRole) {
+        if (jda == null || !reserve()) return;
+        String safe = DiscordText.fit(text);
+        synchronized (pendingUntilReady) {
+            if (closed.get()) { release(); return; }
+            if (!ready) {
+                pendingUntilReady.add(new PendingOutbound(channelId, safe, allowConfiguredRole));
+                return;
+            }
+        }
+        dispatch(channelId, safe, allowConfiguredRole);
+    }
+
+    private void markReady() {
+        List<PendingOutbound> pending;
+        synchronized (pendingUntilReady) {
+            if (ready || closed.get()) return;
+            ready = true;
+            pending = new ArrayList<>(pendingUntilReady);
+            pendingUntilReady.clear();
+        }
+        logger.info("LunaBridge Discord gateway ready; flushing {} queued delivery attempt(s).", pending.size());
+        pending.forEach(outbound -> dispatch(outbound.channelId(), outbound.text(), outbound.allowConfiguredRole()));
+    }
+
+    private List<PendingOutbound> pendingUntilReady() {
+        synchronized (pendingUntilReady) {
+            List<PendingOutbound> pending = new ArrayList<>(pendingUntilReady);
+            pendingUntilReady.clear();
+            return pending;
+        }
+    }
+
+    private void dispatch(String channelId, String text, boolean allowConfiguredRole) {
+        if (closed.get() || jda == null) { release(); return; }
+        MessageChannel channel = jda.getChannelById(MessageChannel.class, channelId);
+        if (channel == null) { release(); logger.warn("LunaBridge Discord channel {} is unavailable", channelId); return; }
+        try {
+            channel.sendMessage(text).mentionRepliedUser(false)
+                    .setAllowedMentions(allowConfiguredRole ? Set.of(Message.MentionType.ROLE) : Collections.emptySet())
+                    .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord delivery failed"); });
+        } catch (RuntimeException unavailable) { release(); logger.warn("LunaBridge Discord delivery unavailable"); }
+    }
+
+    private boolean reserve() {
+        if (jda == null || closed.get()) return false;
+        int reserved = outboundInFlight.incrementAndGet();
+        if (reserved > MAX_OUTBOUND || closed.get()) { release(); return false; }
+        return true;
+    }
+
+    private void release() {
+        outboundInFlight.decrementAndGet();
+        synchronized (completionMonitor) { completionMonitor.notifyAll(); }
+    }
+
+    private void awaitOutbound(Duration maximum) {
+        long deadline = System.nanoTime() + maximum.toNanos();
+        synchronized (completionMonitor) {
+            while (outboundInFlight.get() > 0) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                try { completionMonitor.wait(Math.max(1, Math.min(Duration.ofNanos(remaining).toMillis(), 250))); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
+            }
+        }
+    }
+
+    private String playersText() {
+        List<String> names = players.onlinePlayerNames().stream().sorted().toList();
+        return names.isEmpty() ? "No players online." : "Online (" + names.size() + "): " + String.join(", ", names);
+    }
+
+    public static boolean textPlayersEnabled(DiscordSettings settings) {
+        String mode = settings.option("discord.commands.players.mode", "both").toLowerCase();
+        return Boolean.parseBoolean(settings.option("discord.text-commands.enabled", "true"))
+                && ("text".equals(mode) || "both".equals(mode));
+    }
+
+    public static boolean playersSlashEnabled(DiscordSettings settings) {
+        String mode = settings.option("discord.commands.players.mode", "both").toLowerCase();
+        return "slash".equals(mode) || "both".equals(mode);
+    }
+
+    public static boolean isAllowedCommandChannel(DiscordSettings settings, String channelId) {
+        return settings.discordChannelToLunaChatChannelId().containsKey(channelId);
+    }
+
+    private static String format(String template, Map<String, String> placeholders) {
+        String result = template;
+        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
+            result = result.replace("{{" + entry.getKey() + "}}", entry.getValue())
+                    .replace("{" + entry.getKey() + "}", entry.getValue());
+        }
+        return result;
+    }
+
+    private static String authorName(AcceptedMessage message) {
+        MessageAuthor author = message.author();
+        if (author instanceof MessageAuthor.Player player) return player.displayName();
+        if (author instanceof MessageAuthor.External external) return external.displayName();
+        if (author instanceof MessageAuthor.System system) return system.name();
+        return "Unknown";
+    }
+
+    private static Map<String, String> reverseMappings(DiscordSettings settings) {
+        Map<String, String> reverse = new HashMap<>();
+        settings.discordChannelToLunaChatChannelId().forEach((discord, luna) -> reverse.put(luna, discord));
+        return Map.copyOf(reverse);
+    }
+}

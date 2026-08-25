@@ -4,7 +4,8 @@ plugins {
 }
 
 val velocityApiVersion = project.property("velocityApiVersion").toString()
-val jdaVersion = project.property("jdaVersion").toString()
+val lunaChatApiVersion = project.property("lunaChatApiVersion").toString()
+val lunaChatApiJar = providers.gradleProperty("lunaChatApiJar").orNull
 val pluginVersion = version.toString()
 require(pluginVersion.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) {
     "projectVersion must be a SemVer-compatible value"
@@ -17,13 +18,13 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":lunabridge-core"))
-    compileOnly(project(":lunachat-integration-api"))
+    implementation(project(":lunabridge-discord"))
+    if (lunaChatApiJar == null) compileOnly("com.github.ucchyocean:lunachat-api:$lunaChatApiVersion")
+    else compileOnly(files(lunaChatApiJar))
     compileOnly("com.velocitypowered:velocity-api:$velocityApiVersion")
     annotationProcessor("com.velocitypowered:velocity-api:$velocityApiVersion")
-    implementation("net.dv8tion:JDA:$jdaVersion")
     testImplementation("com.velocitypowered:velocity-api:$velocityApiVersion")
-    testImplementation(project(":lunachat-integration-api"))
+    testCompileOnly(if (lunaChatApiJar == null) "com.github.ucchyocean:lunachat-api:$lunaChatApiVersion" else files(lunaChatApiJar))
 }
 
 sourceSets.main {

@@ -15,6 +15,8 @@ class VersionMetadataTest {
             String metadata = new String(resource.readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(metadata.contains("version: " + System.getProperty("lunabridge.projectVersion")));
             assertTrue(metadata.contains("api-version: '26.2'"));
+            assertTrue(metadata.contains("lunabridge:"));
+            assertTrue(metadata.contains("permission: lunabridge.admin"));
         }
     }
 }

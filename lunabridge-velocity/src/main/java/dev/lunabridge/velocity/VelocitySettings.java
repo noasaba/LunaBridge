@@ -1,32 +1,25 @@
 package dev.lunabridge.velocity;
 
-import dev.lunabridge.core.config.ConfigMigration;
+import dev.lunabridge.discord.DiscordSettings;
+import dev.lunabridge.discord.DiscordToken;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 
-/** Versioned Velocity properties with backup-before-rewrite and no silent future downgrade. */
 final class VelocitySettings {
-    final String sharedPass;
-    final int pendingDeliveries;
-    final int dedupEntries;
-    final String discordToken;
-    final Map<String, String> discordChannels;
-    final Properties properties;
+    private static final int CURRENT_SCHEMA = 3;
+    final DiscordSettings discord;
 
-    private VelocitySettings(String sharedPass, int pendingDeliveries, int dedupEntries, String discordToken,
-                             Map<String, String> discordChannels, Properties properties) {
-        this.sharedPass = sharedPass; this.pendingDeliveries = pendingDeliveries; this.dedupEntries = dedupEntries;
-        this.discordToken = discordToken; this.discordChannels = Map.copyOf(discordChannels); this.properties = properties;
-    }
+    private VelocitySettings(DiscordSettings discord) { this.discord = discord; }
 
     static VelocitySettings load(Path dataDirectory) throws IOException {
         Files.createDirectories(dataDirectory);
@@ -37,48 +30,68 @@ final class VelocitySettings {
         }
         Properties properties = new Properties();
         try (var input = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { properties.load(input); }
-        Map<String, String> schema = new LinkedHashMap<>();
-        for (String key : new String[] {"config-version", "network.velocity", "network.shared-pass", "limits.network-outbox", "limits.dedup-entries"}) {
-            schema.put(key, properties.getProperty(key, ""));
-        }
-        schema.put("network.velocity", "true");
-        schema.put("limits.network-outbox", properties.getProperty("limits.pending-deliveries", "1024"));
-        ConfigMigration.Result migration = ConfigMigration.migrate(schema);
-        if (migration.newerSchema()) throw new IllegalStateException("Velocity configuration schema is newer than this LunaBridge build");
-        if (migration.changed()) {
+        int version;
+        try { version = Integer.parseInt(properties.getProperty("config-version", "0")); }
+        catch (NumberFormatException invalid) { throw new IllegalStateException("config-version must be numeric"); }
+        if (version > CURRENT_SCHEMA) throw new IllegalStateException("Velocity configuration schema is newer than this LunaBridge build");
+        if (hasLegacySettings(properties)) {
             Files.copy(file, file.resolveSibling("config.properties.v0.bak"), StandardCopyOption.REPLACE_EXISTING);
-            properties.setProperty("config-version", migration.values().get("config-version"));
-            properties.putIfAbsent("network.shared-pass", migration.values().get("network.shared-pass"));
-            properties.putIfAbsent("limits.pending-deliveries", migration.values().get("limits.network-outbox"));
-            properties.putIfAbsent("limits.dedup-entries", migration.values().get("limits.dedup-entries"));
-            try (OutputStream output = Files.newOutputStream(file)) { properties.store(output, "LunaBridge Velocity configuration"); }
+            properties.keySet().removeIf(key -> key.toString().startsWith("network.") || key.toString().startsWith("limits.")
+                    || key.toString().equals("server.id") || isLegacyChannelKey(key.toString()));
         }
-        Map<String, String> channels = new LinkedHashMap<>();
-        Map<String, String> bridgeByChannelId = new LinkedHashMap<>();
-        for (String property : properties.stringPropertyNames()) if (property.startsWith("discord.channels.")) {
-            String key = property.substring("discord.channels.".length());
-            String channelId = properties.getProperty(property, "").trim();
-            if (channelId.isEmpty()) continue;
-            if (!key.matches("[a-z0-9][a-z0-9._-]{0,63}") || !channelId.matches("[0-9]{5,32}")) {
-                throw new IllegalStateException("invalid Discord bridge mapping " + property);
-            }
-            String previous = bridgeByChannelId.put(channelId, key);
-            if (previous != null) {
-                throw new IllegalStateException("Discord channel " + channelId + " is mapped by both " + previous + " and " + key);
-            }
-            channels.put(key, channelId);
+        properties.setProperty("config-version", Integer.toString(CURRENT_SCHEMA));
+        try (OutputStream output = Files.newOutputStream(file)) { properties.store(output, "LunaBridge Velocity configuration"); }
+
+        Map<String, String> mappings = new LinkedHashMap<>();
+        for (String property : properties.stringPropertyNames()) {
+            String prefix = "discord.channels.";
+            String suffix = ".lunachat-channel-id";
+            if (!property.startsWith(prefix) || !property.endsWith(suffix)) continue;
+            String discordChannelId = property.substring(prefix.length(), property.length() - suffix.length());
+            String stableId = properties.getProperty(property, "").trim();
+            if (stableId.isEmpty()) continue;
+            validateMapping(discordChannelId, stableId);
+            if (mappings.put(discordChannelId, stableId) != null) throw new IllegalStateException("duplicate Discord channel mapping");
         }
-        return new VelocitySettings(properties.getProperty("network.shared-pass", ""),
-                bounded(properties, "limits.pending-deliveries", 1024, 1, 4096),
-                bounded(properties, "limits.dedup-entries", 10_000, 64, 100_000),
-                properties.getProperty("discord.token", "").trim(), channels, properties);
+        Map<String, String> options = new LinkedHashMap<>();
+        for (String property : properties.stringPropertyNames()) options.put(property, properties.getProperty(property, ""));
+        String token = DiscordToken.resolve(properties.getProperty("discord.token", ""),
+                properties.getProperty("discord.token-file", ""), dataDirectory);
+        return new VelocitySettings(new DiscordSettings(token, mappings, options));
     }
 
-    private static int bounded(Properties properties, String key, int fallback, int min, int max) {
-        int value;
-        try { value = Integer.parseInt(properties.getProperty(key, Integer.toString(fallback))); }
-        catch (NumberFormatException invalid) { throw new IllegalStateException(key + " must be an integer"); }
-        if (value < min || value > max) throw new IllegalStateException(key + " must be " + min + ".." + max);
-        return value;
+    static void saveMapping(Path dataDirectory, String discordChannelId, String stableId) throws IOException {
+        validateMapping(discordChannelId, stableId);
+        Path file = dataDirectory.resolve("config.properties");
+        Properties properties = new Properties();
+        try (var input = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { properties.load(input); }
+        properties.setProperty("config-version", Integer.toString(CURRENT_SCHEMA));
+        properties.setProperty("discord.channels." + discordChannelId + ".lunachat-channel-id", stableId);
+        Path temporary = file.resolveSibling("config.properties.tmp");
+        try (OutputStream output = Files.newOutputStream(temporary)) {
+            properties.store(output, "LunaBridge Velocity configuration");
+        }
+        try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+        catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static boolean hasLegacySettings(Properties properties) {
+        for (String key : properties.stringPropertyNames()) {
+            if (key.startsWith("network.") || key.startsWith("limits.") || key.equals("server.id") || isLegacyChannelKey(key)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isLegacyChannelKey(String key) {
+        return key.startsWith("discord.channels.") && !key.endsWith(".lunachat-channel-id");
+    }
+
+    private static void validateMapping(String discordChannelId, String stableId) {
+        if (!discordChannelId.matches("[0-9]{5,32}")) throw new IllegalStateException("invalid Discord channel id");
+        try {
+            if (!UUID.fromString(stableId).toString().equals(stableId)) throw new IllegalStateException("ChannelId must be canonical UUID");
+        } catch (IllegalArgumentException invalid) { throw new IllegalStateException("ChannelId must be canonical UUID", invalid); }
     }
 }

@@ -6,9 +6,9 @@ LunaBridgeの製品バージョンはSemVer形式で管理し、`gradle.properti
 
 | 対象 | 現在値 | 正本・用途 |
 | --- | --- | --- |
-| 製品 | `0.2.0` | `gradle.properties`の`projectVersion` |
-| Wire protocol | `2` | handshake、secure frame、message codec |
-| Config schema | `1` | Paper/Velocity設定。保存形式はv1互換 |
+| 製品 | `0.3.0-beta.4` | `gradle.properties`の`projectVersion` |
+| Wire protocol | LunaChat側管理 | LunaBridgeはMinecraft transportを所有しない |
+| Config schema | `3` | token-fileと管理コマンド対応のDiscord設定 |
 | Paper API | `26.2` / build 117 | コンパイル対象および`plugin.yml`の最低API |
 | Velocity API | `4.1.0-SNAPSHOT` | コンパイル依存。製品バージョンではない |
 
@@ -25,7 +25,7 @@ LunaBridgeの製品バージョンはSemVer形式で管理し、`gradle.properti
 
 ## 独立して管理する番号
 
-- Wire protocol: handshake、secure frame、message codecの互換性が切れる場合に上げる。製品バージョンの更新も必須。
+- Wire protocol: LunaChat側のnetwork transportで管理する。LunaBridgeにはwire protocolを持たせない。
 - Config schema: 永続設定のキー、意味、既定値、移行処理が変わる場合に上げ、migration testを追加する。単なる検証強化で保存形式が同じなら据え置ける。
 - Paper `api-version`: 最低対応Paper/Minecraft APIを変える場合だけ更新する。製品バージョンの代わりではない。
 - 依存ライブラリのバージョン: 製品バージョンとは別物。依存更新で配布物が変わる場合は製品バージョンも上げる。

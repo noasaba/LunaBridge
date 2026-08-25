@@ -1,38 +1,20 @@
-# Operations and migration
+# Operations
 
-## Minimal configuration
+LunaBridge is configured only with Discord connector settings and stable LunaChat channel IDs. It does not contain a network passphrase, server ID, ACK, handshake, carrier, or transport setting.
 
-Velocity `plugins/lunabridge-velocity/config.properties`:
+Velocity configuration example:
 
 ```properties
-network.shared-pass=use-a-random-secret-at-least-16-characters
-discord.token=PUT_DISCORD_BOT_TOKEN_HERE
-discord.channels.global=123456789012345678
+config-version=3
+discord.token-file=/secure/path/discord-token
 ```
 
-Every Paper `plugins/LunaBridge-Paper/config.yml`:
+Then run `lunabridge setup 123456789012345678 global` from the server console. The command resolves the name or alias once, requires external publishing, saves the stable UUID mapping, applies it live, and queues a Discord test message. Run `lunabridge doctor` to inspect API role/version, LunaChat network status, token presence, Discord readiness, and every mapping. Administration is console-only.
 
-```yaml
-server:
-  id: "lobby" # must equal the Velocity backend name
-network:
-  velocity: true
-  shared-pass: "use-a-random-secret-at-least-16-characters"
-bridges:
-  global:
-    luna-channel: "Global"
-```
+Inline `discord.token` remains backward compatible, but `discord.token-file` takes precedence and avoids copying the credential into generated configuration. Relative token-file paths are resolved from the plugin data directory. Paper standalone uses the equivalent YAML keys under `discord`.
 
-Do not put a Discord token on Paper. Keep the passphrase out of source control. Rotate it on Velocity and every backend together; a partial rotation intentionally prevents network bridging until the configuration is consistent.
+A channel mapping is checked with `api.channels().find(channelId)` at startup; missing IDs, unsupported roles, unavailable providers, incompatible API majors, and missing capabilities fail closed before JDA connects while the administration command remains available for diagnosis where the platform permits it.
 
-## Migration and lifecycle
+When an old config contains network settings or name-based mappings, LunaBridge writes `config.yml.v0.bak` or `config.properties.v0.bak`, removes the old transport keys, and logs that stable ChannelIds must be configured manually. It never copies a network secret into the new configuration and never silently turns a channel name into a permanent ID.
 
-Both configurations are schema versioned. Before a schema rewrite, LunaBridge creates `config.yml.v0.bak` or `config.properties.v0.bak`; existing values win, repeat migration is idempotent, and a newer schema is rejected rather than downgraded. Velocity persists a monotonically increasing network epoch and a capped first-login UUID ledger.
-
-Paper handshakes whenever a plugin-message carrier is available, even with an empty outbox. Heartbeats detect a restarted or unreachable Velocity and automatically establish a replacement session; unexpired logical work is retried using fresh secure frames. Carrier selection is performed for every send attempt, so a player switch does not pin an obsolete connection. With no player carrier, local LunaChat continues and the bounded network work expires normally.
-
-On disable, Paper unregisters its plugin-message channels and drops only bounded bridge state. Velocity gives its final Discord notification at most three seconds to complete, then unregisters the channel, closes the sole JDA instance, clears sessions, and destroys derived secret material. The first-login ledger is forced to disk before its notification; invalid or partial records stop bridge initialization and preserve the file for diagnosis. LunaChat's listeners, commands, and local chat behavior are never registered or altered by LunaBridge.
-
-## Failure diagnosis
-
-Check the Velocity log for the backend name, logical message UUID, rejection code, and detail. Do not increase queue limits to conceal an outage. Fix the carrier, backend identity, channel manifest, or shared passphrase, then allow the automatic HMAC session to establish. Local LunaChat traffic continuing while the bridge is unavailable is expected behavior.
+On disable, the API subscription is closed before the Discord connector. JDA outbound work is drained for at most three seconds during the Velocity shutdown notification; pending publish retries are cancelled. Local LunaChat operation is not owned or stopped by LunaBridge.

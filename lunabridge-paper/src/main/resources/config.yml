@@ -1,15 +1,20 @@
 # LunaBridge-Paper never owns Minecraft chat commands or a Discord client.
-config-version: 1
-server:
-  id: "lobby"
-network:
-  velocity: true
-  # Set the same random 16+ character value as the Velocity config. Do not commit it.
-  shared-pass: ""
+config-version: 3
+discord:
+  token: "PUT_DISCORD_BOT_TOKEN_HERE"
+  # Absolute path, or a path relative to this plugin directory. Takes precedence over token.
+  token-file: ""
+  notifications:
+    channel-id: ""
+    enable:
+      startup: true
+      shutdown: true
+      join: true
+      quit: true
+    startup: "✅ Server started"
+    shutdown: "⛔ Server stopped"
+    join: "➡️ {{player}} joined"
+    quit: "⬅️ {{player}} left"
 bridges:
-  global:
-    luna-channel: "global"
-    discord-channel-id: ""
-limits:
-  network-outbox: 256
-  dedup-entries: 10000
+  # "123456789012345678":
+  #   lunachat-channel-id: "550e8400-e29b-41d4-a716-446655440000"

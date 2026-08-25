@@ -4,7 +4,8 @@ plugins {
 }
 
 val paperApiVersion = project.property("paperApiVersion").toString()
-val lunaChatVersion = project.property("lunaChatVersion").toString()
+val lunaChatApiVersion = project.property("lunaChatApiVersion").toString()
+val lunaChatApiJar = providers.gradleProperty("lunaChatApiJar").orNull
 val pluginVersion = version.toString()
 
 repositories {
@@ -14,12 +15,12 @@ repositories {
 }
 
 dependencies {
-    implementation(project(":lunabridge-core"))
+    implementation(project(":lunabridge-discord"))
     compileOnly("io.papermc.paper:paper-api:$paperApiVersion")
-    // Official LunaChat distribution; never shaded or bundled.
-    compileOnly("com.github.ucchyocean:LunaChat:$lunaChatVersion") { isTransitive = false }
+    if (lunaChatApiJar == null) compileOnly("com.github.ucchyocean:lunachat-api:$lunaChatApiVersion")
+    else compileOnly(files(lunaChatApiJar))
     testImplementation("io.papermc.paper:paper-api:$paperApiVersion")
-    testImplementation("com.github.ucchyocean:LunaChat:$lunaChatVersion") { isTransitive = false }
+    testCompileOnly(if (lunaChatApiJar == null) "com.github.ucchyocean:lunachat-api:$lunaChatApiVersion" else files(lunaChatApiJar))
 }
 
 tasks.processResources {
@@ -29,7 +30,7 @@ tasks.processResources {
 tasks.test { systemProperty("lunabridge.projectVersion", pluginVersion) }
 
 tasks.shadowJar {
-    archiveBaseName.set("lunabridge-paper")
+    archiveBaseName.set("lunabridge-paper-standalone")
     archiveClassifier.set("")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")

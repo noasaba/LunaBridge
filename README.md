@@ -1,32 +1,58 @@
 # LunaBridge
 
-LunaBridge is a secure network and Discord bridge for [LunaChat](https://github.com/ucchyocean/LunaChat). It does not replace LunaChat: LunaChat owns Minecraft chat channels, formatting, permissions, moderation, `/ch`, `/tell`, and `/r`; LunaBridge observes confirmed channel messages and extends them across a Velocity network.
+LunaBridge is a Discord integration consumer for LunaChat. The boundary is:
 
-## Install
+> LunaChat owns Minecraft chat and Minecraft inter-server networking. LunaBridge owns Discord integration only.
 
-Install `lunabridge-paper/build/libs/lunabridge-paper-0.2.0.jar` plus LunaChat v3.0.16 on every Paper backend, and `lunabridge-velocity/build/libs/lunabridge-velocity-0.2.0.jar` on Velocity. Configure the same random 16+ character `network.shared-pass` in each Paper `config.yml` and the Velocity `config.properties`.
+Supported topologies:
 
-Only Velocity owns the Discord bot. Paper has no JDA dependency, no Discord token, and no Discord connection.
+- Standalone: `LunaChat-Paper` + `lunabridge-paper-standalone.jar`.
+- Network: `LunaChat-Velocity` + `LunaChat-Paper` backends + `lunabridge-velocity.jar` on the proxy. Do not install the Paper standalone bridge on network backends.
 
-The one required bridge mapping is stable bridge key → LunaChat channel name, for example `global` → `Global`. The key, rather than a LunaChat display name, becomes the network identity.
+Both bridge artifacts consume the Frozen LunaChat Integration API v1:
+
+```text
+com.github.ucchyocean:lunachat-api:1.0.0-SNAPSHOT
+```
+
+The API is a `compileOnly`/provided contract and is never shaded into LunaBridge. LunaBridge discovers it through Bukkit `ServicesManager` on standalone Paper and through LunaChat's `LunaChatApiProvider.current()` on Velocity. The expected roles are respectively `STANDALONE_AUTHORITY` and `NETWORK_AUTHORITY`; network edges are rejected before JDA starts.
+
+Discord mappings use stable LunaChat channel IDs, not channel names:
+
+```yaml
+bridges:
+  "123456789012345678":
+    lunachat-channel-id: "550e8400-e29b-41d4-a716-446655440000"
+```
+
+Discord-origin messages are submitted only with `MessageGateway.publishExternal`, using `lunabridge:discord` and the Discord message ID as the provider idempotency key. Only accepted messages whose origin is `MINECRAFT` are relayed back to Discord.
+
+The build targets Java 25, Paper API `26.2.build.117-stable`, Velocity API `4.1.0-SNAPSHOT`, and JDA `6.4.1`.
 
 ## Build
 
-```sh
-./gradlew test
-./gradlew assemble
+```text
+./gradlew clean test assemble --rerun-tasks
 ```
 
-Build toolchain and bytecode target: Java 25. The build uses Paper API `26.2.build.117-stable`, Velocity API `4.1.0-SNAPSHOT`, JDA `6.4.1`, Gradle `9.6.1`, and the official LunaChat `3.0.16` artifact as an unbundled `compileOnly` dependency.
+For a local LunaChat checkout whose API artifact has not been installed to a Maven repository, pass the provided artifact explicitly:
 
-The old LunaChat POM has unavailable historical bStats transitive dependencies. LunaBridge explicitly resolves its official artifact non-transitively because it calls only the public LunaChat API; the generated LunaBridge JAR never embeds LunaChat.
+```text
+./gradlew clean test assemble --rerun-tasks \
+  -PlunaChatApiJar=/path/to/lunachat-api-1.0.0-SNAPSHOT.jar
+```
 
-## Design documents
+Minecraft legacy color and decoration codes are removed at the Discord presentation boundary; the Frozen API message and Minecraft rendering remain untouched.
 
-- [Architecture and authority boundaries](docs/ARCHITECTURE.md)
-- [LunaChat fork API redesign handoff prompt](docs/LUNACHAT_API_HANDOFF_PROMPT.md)
-- [Post-fork LunaBridge direction and code recovery](docs/BRIDGE_POST_FORK_DIRECTION.md)
-- [Security and delivery semantics](docs/SECURITY_AND_DELIVERY.md)
-- [Operations, migration, and compatibility scope](docs/OPERATIONS.md)
-- [Test strategy and optional process E2E lane](docs/TESTING.md)
-- [Versioning policy](VERSIONING.md)
+## Quick setup
+
+Put the bot token in a separate file, set `discord.token-file` to its absolute path (or a path relative to the plugin data directory), then use the server console:
+
+```text
+lunabridge setup <discord-channel-id> <lunachat-channel-name-or-alias>
+lunabridge doctor
+```
+
+`setup` resolves the name once through the Frozen API, refuses channels that do not accept external messages, persists only the stable `ChannelId`, applies the mapping without reconnecting JDA, and queues a Discord test message. Both administration commands are console-only.
+
+The product version is `0.3.0-beta.4`, generated from `gradle.properties`.
