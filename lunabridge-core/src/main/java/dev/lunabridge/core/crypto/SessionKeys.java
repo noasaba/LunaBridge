@@ -24,11 +24,15 @@ public final class SessionKeys {
         transcript.putLong(sessionId.getMostSignificantBits()).putLong(sessionId.getLeastSignificantBits());
         transcript.put(clientNonce).put(serverNonce);
         byte[] prk = HkdfSha256.extract(serverKey, transcript.array());
-        return new SessionKeys(
-                HkdfSha256.expand(prk, "lunabridge/v1/c2s/key", 32),
-                HkdfSha256.expand(prk, "lunabridge/v1/s2c/key", 32),
-                HkdfSha256.expand(prk, "lunabridge/v1/c2s/nonce", 4),
-                HkdfSha256.expand(prk, "lunabridge/v1/s2c/nonce", 4));
+        try {
+            return new SessionKeys(
+                    HkdfSha256.expand(prk, "lunabridge/v2/c2s/key", 32),
+                    HkdfSha256.expand(prk, "lunabridge/v2/s2c/key", 32),
+                    HkdfSha256.expand(prk, "lunabridge/v2/c2s/nonce", 4),
+                    HkdfSha256.expand(prk, "lunabridge/v2/s2c/nonce", 4));
+        } finally {
+            Arrays.fill(prk, (byte) 0);
+        }
     }
 
     public byte[] key(boolean clientToServerDirection) {

@@ -10,6 +10,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.Clock;
 import java.util.UUID;
 
 /** Strict UTF-8 wire form; platform Components and JDA values never cross this boundary. */
@@ -18,8 +19,8 @@ public final class BridgeMessageCodec {
 
     public static byte[] encode(BridgeMessage message) {
         try (ByteArrayOutputStream bytes = new ByteArrayOutputStream(); DataOutputStream out = new DataOutputStream(bytes)) {
-            out.writeShort(1);
-            uuid(out, message.id()); uuid(out, message.traceId()); out.writeByte(message.origin().ordinal());
+            out.writeShort(2);
+            uuid(out, message.id()); out.writeByte(message.origin().ordinal());
             string(out, message.bridgeChannel(), 64); string(out, message.lunaChannelName(), 128);
             out.writeBoolean(message.authorId() != null); if (message.authorId() != null) uuid(out, message.authorId());
             string(out, message.authorName(), 128); string(out, message.content(), 16 * 1024);
@@ -31,17 +32,25 @@ public final class BridgeMessageCodec {
     public static BridgeMessage decode(byte[] bytes) throws ProtocolException {
         if (bytes == null || bytes.length > 28 * 1024) throw new ProtocolException(ProtocolException.Code.LIMIT_EXCEEDED, "message payload too large");
         try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
-            if (in.readUnsignedShort() != 1) throw new IOException("unsupported message version");
-            UUID id = uuid(in); UUID trace = uuid(in); int origin = in.readUnsignedByte();
+            if (in.readUnsignedShort() != 2) throw new IOException("unsupported message version");
+            UUID id = uuid(in); int origin = in.readUnsignedByte();
             if (origin >= BridgeOrigin.values().length) throw new IOException("invalid origin");
             String bridge = string(in, 64); String luna = string(in, 128);
             UUID author = in.readBoolean() ? uuid(in) : null;
-            BridgeMessage message = new BridgeMessage(id, trace, BridgeOrigin.values()[origin], bridge, luna, author,
+            BridgeMessage message = new BridgeMessage(id, BridgeOrigin.values()[origin], bridge, luna, author,
                     string(in, 128), string(in, 16 * 1024), string(in, 64), Instant.ofEpochMilli(in.readLong()), Instant.ofEpochMilli(in.readLong()));
             if (in.available() != 0) throw new IOException("trailing message bytes");
             return message;
         } catch (IOException | IllegalArgumentException error) {
             throw new ProtocolException(ProtocolException.Code.MALFORMED, "invalid bridge message");
+        }
+    }
+
+    /** Rejects clock-skew abuse before a remote logical deadline can consume bounded idempotency state. */
+    public static void requireCurrent(BridgeMessage message, Clock clock) throws ProtocolException {
+        Instant now = clock.instant();
+        if (message.issuedAt().isAfter(now.plusSeconds(30)) || !message.expiresAt().isAfter(now)) {
+            throw new ProtocolException(ProtocolException.Code.EXPIRED, "bridge message is outside its delivery window");
         }
     }
 

@@ -3,6 +3,7 @@ package dev.lunabridge.core;
 import dev.lunabridge.core.crypto.SessionKeys;
 import dev.lunabridge.core.crypto.SharedPassphrase;
 import dev.lunabridge.core.protocol.HandshakeMessages;
+import dev.lunabridge.core.protocol.ChannelManifestCodec;
 import dev.lunabridge.core.protocol.ProtocolException;
 import dev.lunabridge.core.protocol.ProtocolType;
 import dev.lunabridge.core.protocol.SecureFrameCodec;
@@ -12,6 +13,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -21,27 +23,31 @@ class SecureProtocolTest {
     @Test void handshakeDerivesMatchingDirectionalKeysAndAuthenticatedFrame() throws Exception {
         SharedPassphrase passphrase = SharedPassphrase.from("correct horse battery staple");
         byte[] key = passphrase.keyForServer("lobby");
-        HandshakeMessages.ClientState client = HandshakeMessages.begin("lobby", key, CLOCK);
+        byte[] manifest = ChannelManifestCodec.encode(Map.of("global", "Global"));
+        HandshakeMessages.ClientState client = HandshakeMessages.begin("lobby", key, manifest, CLOCK);
         HandshakeMessages.IssuedChallenge issued = HandshakeMessages.challenge(client.hello(), key, CLOCK);
         HandshakeMessages.Proof proof = HandshakeMessages.prove(client, issued.challenge(), CLOCK);
         HandshakeMessages.Accepted accepted = HandshakeMessages.verifyProof(issued, proof, 42L, CLOCK);
         SessionKeys paperKeys = HandshakeMessages.verifyAccepted(client, issued.challenge(), accepted, CLOCK);
         SessionKeys velocityKeys = HandshakeMessages.keys(issued);
-        SecureFrameCodec sender = new SecureFrameCodec(accepted.sessionId(), accepted.epoch(), paperKeys, true, CLOCK);
-        SecureFrameCodec receiver = new SecureFrameCodec(accepted.sessionId(), accepted.epoch(), velocityKeys, true, CLOCK);
+        Instant expiry = Instant.ofEpochMilli(accepted.expiresAt());
+        SecureFrameCodec sender = new SecureFrameCodec(accepted.sessionId(), accepted.epoch(), expiry, paperKeys, true, CLOCK);
+        SecureFrameCodec receiver = new SecureFrameCodec(accepted.sessionId(), accepted.epoch(), expiry, velocityKeys, true, CLOCK);
         UUID request = UUID.randomUUID();
         byte[] encoded = sender.encode(ProtocolType.CHAT_UP, request, "hello".getBytes(), 1_000);
         SecureFrameCodec.Decoded decoded = receiver.decode(encoded);
         assertEquals(ProtocolType.CHAT_UP, decoded.type());
-        assertEquals(request, decoded.requestId());
+        assertEquals(request, decoded.logicalMessageId());
+        assertEquals(accepted.sessionId(), decoded.frameIdentity().sessionId());
         assertArrayEquals("hello".getBytes(), decoded.payload());
     }
 
     @Test void tamperingAndReplayAreRejectedWithoutFallback() throws Exception {
         SessionKeys keys = SessionKeys.derive(new byte[32], UUID.randomUUID(), new byte[32], new byte[32]);
         UUID session = UUID.randomUUID();
-        SecureFrameCodec sender = new SecureFrameCodec(session, 2, keys, true, CLOCK);
-        SecureFrameCodec receiver = new SecureFrameCodec(session, 2, keys, true, CLOCK);
+        Instant expiry = CLOCK.instant().plusSeconds(60);
+        SecureFrameCodec sender = new SecureFrameCodec(session, 2, expiry, keys, true, CLOCK);
+        SecureFrameCodec receiver = new SecureFrameCodec(session, 2, expiry, keys, true, CLOCK);
         byte[] valid = sender.encode(ProtocolType.CHAT_UP, UUID.randomUUID(), new byte[] {1}, 1_000);
         byte[] tampered = valid.clone(); tampered[tampered.length - 1] ^= 1;
         assertEquals(ProtocolException.Code.AUTHENTICATION_FAILED,
@@ -53,7 +59,7 @@ class SecureProtocolTest {
 
     @Test void challengeCannotBeAlteredOrUsedForAnotherClient() throws Exception {
         byte[] key = SharedPassphrase.from("correct horse battery staple").keyForServer("lobby");
-        HandshakeMessages.ClientState client = HandshakeMessages.begin("lobby", key, CLOCK);
+        HandshakeMessages.ClientState client = HandshakeMessages.begin("lobby", key, new byte[0], CLOCK);
         HandshakeMessages.IssuedChallenge issued = HandshakeMessages.challenge(client.hello(), key, CLOCK);
         HandshakeMessages.Challenge changed = new HandshakeMessages.Challenge("other", issued.challenge().sessionId(),
                 issued.challenge().issuedAt(), issued.challenge().expiresAt(), issued.challenge().clientNonce(),
@@ -64,7 +70,7 @@ class SecureProtocolTest {
 
     @Test void handshakeRejectsMalformedUtf8AndTruncatedMac() {
         byte[] key = SharedPassphrase.from("correct horse battery staple").keyForServer("a");
-        HandshakeMessages.Hello hello = HandshakeMessages.begin("a", key, CLOCK).hello();
+        HandshakeMessages.Hello hello = HandshakeMessages.begin("a", key, new byte[0], CLOCK).hello();
         byte[] malformed = HandshakeMessages.encode(hello);
         malformed[1] = (byte) 0xC0;
         assertEquals(ProtocolException.Code.MALFORMED,

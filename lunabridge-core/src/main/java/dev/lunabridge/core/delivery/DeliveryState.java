@@ -1,12 +1,9 @@
 package dev.lunabridge.core.delivery;
 
-/** Honest state machine: client rendering is intentionally outside this contract. */
+/** Observable logical-delivery states. Secure-frame identity is deliberately separate. */
 public enum DeliveryState {
-    ACCEPTED,
-    FORWARDED,
-    REMOTE_ACCEPTED,
-    DELIVERED,
-    FAILED,
-    EXPIRED,
-    INDETERMINATE
+    QUEUED,
+    IN_FLIGHT,
+    INBOUND_PROCESSING,
+    DELIVERED
 }

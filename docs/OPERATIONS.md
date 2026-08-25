@@ -29,8 +29,10 @@ Do not put a Discord token on Paper. Keep the passphrase out of source control. 
 
 Both configurations are schema versioned. Before a schema rewrite, LunaBridge creates `config.yml.v0.bak` or `config.properties.v0.bak`; existing values win, repeat migration is idempotent, and a newer schema is rejected rather than downgraded. Velocity persists a monotonically increasing network epoch and a capped first-login UUID ledger.
 
-On disable, Paper unregisters its plugin-message channels and drops only bounded bridge state. Velocity unregisters the channel, closes the sole JDA instance, clears sessions, and destroys derived secret material. LunaChat's listeners, commands, and local chat behavior are never registered or altered by LunaBridge.
+Paper handshakes whenever a plugin-message carrier is available, even with an empty outbox. Heartbeats detect a restarted or unreachable Velocity and automatically establish a replacement session; unexpired logical work is retried using fresh secure frames. Carrier selection is performed for every send attempt, so a player switch does not pin an obsolete connection. With no player carrier, local LunaChat continues and the bounded network work expires normally.
+
+On disable, Paper unregisters its plugin-message channels and drops only bounded bridge state. Velocity gives its final Discord notification at most three seconds to complete, then unregisters the channel, closes the sole JDA instance, clears sessions, and destroys derived secret material. The first-login ledger is forced to disk before its notification; invalid or partial records stop bridge initialization and preserve the file for diagnosis. LunaChat's listeners, commands, and local chat behavior are never registered or altered by LunaBridge.
 
 ## Failure diagnosis
 
-Check the Velocity log for the backend name, request UUID, and rejection code. Do not increase queue limits to conceal an outage. Fix the carrier, backend identity, or shared passphrase, then allow a fresh HMAC session to establish. Local LunaChat traffic continuing while the bridge is unavailable is expected behavior.
+Check the Velocity log for the backend name, logical message UUID, rejection code, and detail. Do not increase queue limits to conceal an outage. Fix the carrier, backend identity, channel manifest, or shared passphrase, then allow the automatic HMAC session to establish. Local LunaChat traffic continuing while the bridge is unavailable is expected behavior.

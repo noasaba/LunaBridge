@@ -1,7 +1,6 @@
 package dev.lunabridge.velocity;
 
 import dev.lunabridge.core.model.BridgeMessage;
-import dev.lunabridge.core.model.BridgeOrigin;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
@@ -15,15 +14,14 @@ import net.dv8tion.jda.api.requests.GatewayIntent;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.time.Duration;
 
 /** JDA adapter: channel allowlist, no user-controlled mentions, and bounded asynchronous REST work. */
 final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway {
@@ -34,6 +32,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     private final Map<String, String> bridgeByDiscordChannel;
     private final AtomicInteger outboundInFlight = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final Object completionMonitor = new Object();
     private final List<PendingOutbound> pendingUntilReady = new ArrayList<>();
     private final JDA jda;
     private volatile boolean ready;
@@ -106,23 +105,27 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         jda.shutdown();
     }
 
+    @Override public void finalNotification(String type, Map<String, String> placeholders) {
+        notification(type, placeholders);
+        awaitOutbound(Duration.ofSeconds(3));
+        close();
+    }
+
     @Override public void onReady(@NotNull ReadyEvent event) { markReady(); }
 
     private void handleMessage(MessageReceivedEvent event) {
         if (event.getAuthor().isBot() || event.isWebhookMessage()) return;
+        String bridge = bridgeByDiscordChannel.get(event.getChannel().getId());
+        if (bridge == null) return; // The configured bridge map is also the command and ingress allowlist.
         String content = event.getMessage().getContentDisplay();
         if (settings.properties.getProperty("discord.commands.players.text-trigger", "!p").equals(content.trim())
                 && textPlayersEnabled(settings)) {
             respond(event.getChannel(), playersText());
             return;
         }
-        String bridge = bridgeByDiscordChannel.get(event.getChannel().getId());
-        if (bridge == null) return; // configured channel IDs are the Discord-to-Minecraft allowlist.
-        Instant now = Instant.now();
         String author = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
         try {
-            authority.routeDiscordInbound(new BridgeMessage(UUID.randomUUID(), UUID.randomUUID(), BridgeOrigin.DISCORD,
-                    bridge, bridge, null, author, content, "discord", now, now.plusSeconds(10)));
+            authority.routeDiscordInbound(bridge, author, content);
         } catch (IllegalArgumentException invalid) {
             logger.warn("Rejected invalid Discord bridge message: {}", invalid.getMessage());
         }
@@ -130,6 +133,7 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
 
     private void handleSlash(SlashCommandInteractionEvent event) {
         if (!"players".equals(event.getName()) || !playersSlashEnabled(settings)) return;
+        if (!isAllowedCommandChannel(settings, event.getChannel().getId())) return;
         if (!reserve()) return;
         try {
             event.reply(fitDiscordMessage(playersText())).setEphemeral(true).setAllowedMentions(Collections.emptySet())
@@ -208,8 +212,27 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
         if (reserved > MAX_OUTBOUND || closed.get()) return releaseAndFalse();
         return true;
     }
-    private boolean releaseAndFalse() { outboundInFlight.decrementAndGet(); return false; }
-    private void release() { outboundInFlight.decrementAndGet(); }
+    private boolean releaseAndFalse() { release(); return false; }
+    private void release() {
+        outboundInFlight.decrementAndGet();
+        synchronized (completionMonitor) { completionMonitor.notifyAll(); }
+    }
+    private void awaitOutbound(Duration maximum) {
+        long deadline = System.nanoTime() + maximum.toNanos();
+        synchronized (completionMonitor) {
+            while (outboundInFlight.get() > 0) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) break;
+                try {
+                    long millis = Math.max(1, Math.min(Duration.ofNanos(remaining).toMillis(), 250));
+                    completionMonitor.wait(millis);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+    }
     private String playersText() {
         var players = authority.onlinePlayerNames();
         return players.isEmpty() ? "No players online." : "Online (" + players.size() + "): " + String.join(", ", players);
@@ -222,6 +245,9 @@ final class JdaDiscordGateway extends ListenerAdapter implements DiscordGateway 
     static boolean playersSlashEnabled(VelocitySettings settings) {
         String mode = mode(settings);
         return "slash".equals(mode) || "both".equals(mode);
+    }
+    static boolean isAllowedCommandChannel(VelocitySettings settings, String channelId) {
+        return settings.discordChannels.containsValue(channelId);
     }
     private static String mode(VelocitySettings settings) { return settings.properties.getProperty("discord.commands.players.mode", "both").toLowerCase(); }
     private static String format(String template, Map<String, String> placeholders) {

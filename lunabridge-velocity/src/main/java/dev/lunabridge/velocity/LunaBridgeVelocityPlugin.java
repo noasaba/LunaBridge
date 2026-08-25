@@ -81,7 +81,13 @@ public final class LunaBridgeVelocityPlugin {
         Map<String, String> placeholders = placeholders(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", to);
         if (event.getPreviousServer().isEmpty()) {
             connectedPlayers.add(event.getPlayer().getUniqueId());
-            if (seenPlayers != null && seenPlayers.markFirst(event.getPlayer().getUniqueId()) && notificationEnabled("first-login")) {
+            boolean firstLogin = false;
+            try {
+                firstLogin = seenPlayers != null && seenPlayers.markFirst(event.getPlayer().getUniqueId());
+            } catch (IOException persistenceFailure) {
+                logger.error("LunaBridge could not durably record first-login; first-login alert suppressed", persistenceFailure);
+            }
+            if (firstLogin && notificationEnabled("first-login")) {
                 discord.notification("first-login", placeholders);
             } else if (notificationEnabled("login")) {
                 discord.notification("login", placeholders);
@@ -103,7 +109,7 @@ public final class LunaBridgeVelocityPlugin {
 
     @Subscribe
     public void onShutdown(ProxyShutdownEvent event) {
-        discord.notification("shutdown", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
+        discord.finalNotification("shutdown", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
         cleanup();
     }
 

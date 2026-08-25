@@ -2,6 +2,7 @@ package dev.lunabridge.core.model;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -9,7 +10,6 @@ import java.util.regex.Pattern;
 /** Platform-neutral message accepted by the bridge after the chat engine has made its decision. */
 public record BridgeMessage(
         UUID id,
-        UUID traceId,
         BridgeOrigin origin,
         String bridgeChannel,
         String lunaChannelName,
@@ -25,7 +25,6 @@ public record BridgeMessage(
 
     public BridgeMessage {
         Objects.requireNonNull(id, "id");
-        Objects.requireNonNull(traceId, "traceId");
         Objects.requireNonNull(origin, "origin");
         requireKey(bridgeChannel, "bridgeChannel");
         requireText(lunaChannelName, "lunaChannelName", 128);
@@ -39,6 +38,9 @@ public record BridgeMessage(
         Objects.requireNonNull(expiresAt, "expiresAt");
         if (!expiresAt.isAfter(issuedAt)) {
             throw new IllegalArgumentException("expiry must be after issue time");
+        }
+        if (Duration.between(issuedAt, expiresAt).compareTo(Duration.ofSeconds(10)) > 0) {
+            throw new IllegalArgumentException("logical message lifetime exceeds 10 seconds");
         }
     }
 

@@ -8,6 +8,10 @@ import java.util.Map;
 interface DiscordGateway {
     void relayMinecraft(BridgeMessage message);
     void notification(String type, Map<String, String> placeholders);
+    default void finalNotification(String type, Map<String, String> placeholders) {
+        notification(type, placeholders);
+        close();
+    }
     void close();
     static DiscordGateway disabled() {
         return new DiscordGateway() {

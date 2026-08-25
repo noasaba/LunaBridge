@@ -3,7 +3,7 @@ package dev.lunabridge.core.protocol;
 /** Numeric ids are compatibility contracts; never serialize enum names. */
 public enum ProtocolType {
     HELLO(1), CHALLENGE(2), PROOF(3), ACCEPT(4),
-    CHAT_UP(10), CHAT_DOWN(11), ACK(12), NOTIFICATION(13);
+    CHAT_UP(10), CHAT_DOWN(11), ACK(12), PING(13), PONG(14);
     private final int id;
     ProtocolType(int id) { this.id = id; }
     public int id() { return id; }

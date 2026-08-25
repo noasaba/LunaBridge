@@ -54,10 +54,19 @@ final class VelocitySettings {
             try (OutputStream output = Files.newOutputStream(file)) { properties.store(output, "LunaBridge Velocity configuration"); }
         }
         Map<String, String> channels = new LinkedHashMap<>();
+        Map<String, String> bridgeByChannelId = new LinkedHashMap<>();
         for (String property : properties.stringPropertyNames()) if (property.startsWith("discord.channels.")) {
             String key = property.substring("discord.channels.".length());
             String channelId = properties.getProperty(property, "").trim();
-            if (key.matches("[a-z0-9][a-z0-9._-]{0,63}") && channelId.matches("[0-9]{5,32}")) channels.put(key, channelId);
+            if (channelId.isEmpty()) continue;
+            if (!key.matches("[a-z0-9][a-z0-9._-]{0,63}") || !channelId.matches("[0-9]{5,32}")) {
+                throw new IllegalStateException("invalid Discord bridge mapping " + property);
+            }
+            String previous = bridgeByChannelId.put(channelId, key);
+            if (previous != null) {
+                throw new IllegalStateException("Discord channel " + channelId + " is mapped by both " + previous + " and " + key);
+            }
+            channels.put(key, channelId);
         }
         return new VelocitySettings(properties.getProperty("network.shared-pass", ""),
                 bounded(properties, "limits.pending-deliveries", 1024, 1, 4096),

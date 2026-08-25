@@ -19,16 +19,23 @@ public final class HkdfSha256 {
         byte[] output = new byte[length];
         byte[] previous = new byte[0];
         int written = 0;
-        for (int counter = 1; written < length; counter++) {
-            byte[] input = Arrays.copyOf(previous, previous.length + info.length + 1);
-            System.arraycopy(info, 0, input, previous.length, info.length);
-            input[input.length - 1] = (byte) counter;
-            previous = hmac(prk, input);
-            int take = Math.min(previous.length, length - written);
-            System.arraycopy(previous, 0, output, written, take);
-            written += take;
+        try {
+            for (int counter = 1; written < length; counter++) {
+                byte[] input = Arrays.copyOf(previous, previous.length + info.length + 1);
+                System.arraycopy(info, 0, input, previous.length, info.length);
+                input[input.length - 1] = (byte) counter;
+                byte[] next = hmac(prk, input);
+                Arrays.fill(input, (byte) 0);
+                Arrays.fill(previous, (byte) 0);
+                previous = next;
+                int take = Math.min(previous.length, length - written);
+                System.arraycopy(previous, 0, output, written, take);
+                written += take;
+            }
+            return output;
+        } finally {
+            Arrays.fill(previous, (byte) 0);
         }
-        return output;
     }
 
     public static byte[] hmac(byte[] key, byte[] data) {
