@@ -11,6 +11,7 @@ import java.time.Instant;
 import java.util.List;
 import dev.lunabridge.core.model.BridgeMessage;
 import dev.lunabridge.core.model.BridgeOrigin;
+import com.velocitypowered.api.plugin.Plugin;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -24,6 +25,12 @@ class VelocityPersistenceTest {
         assertFalse(new SeenPlayerStore(temporaryDirectory).markFirst(player));
         long firstEpoch = EpochStore.next(temporaryDirectory);
         assertTrue(EpochStore.next(temporaryDirectory) > firstEpoch);
+    }
+
+    @Test void pluginMetadataUsesTheGradleProductVersion() {
+        Plugin metadata = LunaBridgeVelocityPlugin.class.getAnnotation(Plugin.class);
+        assertNotNull(metadata);
+        assertEquals(System.getProperty("lunabridge.projectVersion"), metadata.version());
     }
 
     @Test void corruptFirstLoginLedgerFailsClosedAndPreservesEvidence() throws Exception {

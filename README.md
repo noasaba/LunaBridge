@@ -4,7 +4,7 @@ LunaBridge is a secure network and Discord bridge for [LunaChat](https://github.
 
 ## Install
 
-Install `lunabridge-paper/build/libs/lunabridge-paper-0.1.0-SNAPSHOT.jar` plus LunaChat v3.0.16 on every Paper backend, and `lunabridge-velocity/build/libs/lunabridge-velocity-0.1.0-SNAPSHOT.jar` on Velocity. Configure the same random 16+ character `network.shared-pass` in each Paper `config.yml` and the Velocity `config.properties`.
+Install `lunabridge-paper/build/libs/lunabridge-paper-0.2.0.jar` plus LunaChat v3.0.16 on every Paper backend, and `lunabridge-velocity/build/libs/lunabridge-velocity-0.2.0.jar` on Velocity. Configure the same random 16+ character `network.shared-pass` in each Paper `config.yml` and the Velocity `config.properties`.
 
 Only Velocity owns the Discord bot. Paper has no JDA dependency, no Discord token, and no Discord connection.
 
@@ -27,3 +27,4 @@ The old LunaChat POM has unavailable historical bStats transitive dependencies. 
 - [Security and delivery semantics](docs/SECURITY_AND_DELIVERY.md)
 - [Operations, migration, and compatibility scope](docs/OPERATIONS.md)
 - [Test strategy and optional process E2E lane](docs/TESTING.md)
+- [Versioning policy](VERSIONING.md)

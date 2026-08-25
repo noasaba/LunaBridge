@@ -24,7 +24,8 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Velocity owns all network state and the sole Discord client in proxy topology. */
-@Plugin(id = "lunabridge-velocity", name = "LunaBridge Velocity", version = "0.1.0-SNAPSHOT")
+@Plugin(id = "lunabridge-velocity", name = "LunaBridge Velocity",
+        version = LunaBridgeBuildVersion.VERSION, authors = {"LunaBridge"})
 public final class LunaBridgeVelocityPlugin {
     static final MinecraftChannelIdentifier CHANNEL = MinecraftChannelIdentifier.from("lunabridge:network");
     private final ProxyServer proxy;

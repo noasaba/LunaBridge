@@ -6,6 +6,10 @@ plugins {
 val velocityApiVersion = project.property("velocityApiVersion").toString()
 val jdaVersion = project.property("jdaVersion").toString()
 val pluginVersion = version.toString()
+require(pluginVersion.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) {
+    "projectVersion must be a SemVer-compatible value"
+}
+val generatedVersionSource = layout.buildDirectory.dir("generated/sources/lunabridgeVersion/java")
 
 repositories {
     mavenCentral()
@@ -20,10 +24,31 @@ dependencies {
     testImplementation("com.velocitypowered:velocity-api:$velocityApiVersion")
 }
 
-tasks.processResources {
-    inputs.property("version", pluginVersion)
-    filesMatching("velocity-plugin.json") { expand("version" to pluginVersion) }
+sourceSets.main {
+    java.srcDir(generatedVersionSource)
 }
+
+val generateVersionSource = tasks.register("generateVersionSource") {
+    inputs.property("version", pluginVersion)
+    outputs.dir(generatedVersionSource)
+    doLast {
+        val packageDirectory = generatedVersionSource.get().dir("dev/lunabridge/velocity").asFile
+        packageDirectory.mkdirs()
+        packageDirectory.resolve("LunaBridgeBuildVersion.java").writeText(
+            """package dev.lunabridge.velocity;
+
+final class LunaBridgeBuildVersion {
+    static final String VERSION = "$pluginVersion";
+    private LunaBridgeBuildVersion() { }
+}
+"""
+        )
+    }
+}
+
+tasks.compileJava { dependsOn(generateVersionSource) }
+tasks.sourcesJar { dependsOn(generateVersionSource) }
+tasks.test { systemProperty("lunabridge.projectVersion", pluginVersion) }
 
 tasks.shadowJar {
     archiveBaseName.set("lunabridge-velocity")

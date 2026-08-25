@@ -1,7 +1,0 @@
-{
-  "id": "lunabridge-velocity",
-  "name": "LunaBridge Velocity",
-  "version": "${version}",
-  "main": "dev.lunabridge.velocity.LunaBridgeVelocityPlugin",
-  "authors": ["LunaBridge"]
-}

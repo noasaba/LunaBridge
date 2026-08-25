@@ -26,6 +26,7 @@ tasks.processResources {
     inputs.property("version", pluginVersion)
     filesMatching("plugin.yml") { expand("version" to pluginVersion) }
 }
+tasks.test { systemProperty("lunabridge.projectVersion", pluginVersion) }
 
 tasks.shadowJar {
     archiveBaseName.set("lunabridge-paper")
