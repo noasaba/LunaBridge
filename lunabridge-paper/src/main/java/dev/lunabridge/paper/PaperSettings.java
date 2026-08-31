@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 final class PaperSettings {
-    private static final int CURRENT_SCHEMA = 3;
+    private static final int CURRENT_SCHEMA = 4;
     final DiscordSettings discord;
 
     private PaperSettings(DiscordSettings discord) { this.discord = discord; }
@@ -25,6 +25,9 @@ final class PaperSettings {
         int version = config.getInt("config-version", 0);
         if (version > CURRENT_SCHEMA) throw new IllegalStateException("configuration schema is newer than this LunaBridge build");
         migrateLegacy(plugin, config);
+        if (!config.contains("discord.minecraft-chat-format")) {
+            config.set("discord.minecraft-chat-format", DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
+        }
         config.set("config-version", CURRENT_SCHEMA);
         plugin.saveConfig();
 
@@ -37,6 +40,8 @@ final class PaperSettings {
             if (mappings.put(discordChannelId, stableId) != null) throw new IllegalStateException("duplicate Discord channel mapping");
         }
         Map<String, String> options = new LinkedHashMap<>();
+        options.put("discord.minecraft-chat-format", config.getString("discord.minecraft-chat-format",
+                DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT));
         options.put("discord.notifications.channel-id", config.getString("discord.notifications.channel-id", ""));
         options.put("discord.notifications.enable.startup", Boolean.toString(config.getBoolean("discord.notifications.enable.startup", true)));
         options.put("discord.notifications.enable.shutdown", Boolean.toString(config.getBoolean("discord.notifications.enable.shutdown", true)));

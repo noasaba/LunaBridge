@@ -16,7 +16,7 @@ import java.util.Properties;
 import java.util.UUID;
 
 final class VelocitySettings {
-    private static final int CURRENT_SCHEMA = 3;
+    private static final int CURRENT_SCHEMA = 4;
     final DiscordSettings discord;
 
     private VelocitySettings(DiscordSettings discord) { this.discord = discord; }
@@ -39,6 +39,7 @@ final class VelocitySettings {
             properties.keySet().removeIf(key -> key.toString().startsWith("network.") || key.toString().startsWith("limits.")
                     || key.toString().equals("server.id") || isLegacyChannelKey(key.toString()));
         }
+        properties.putIfAbsent("discord.minecraft-chat-format", DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
         properties.setProperty("config-version", Integer.toString(CURRENT_SCHEMA));
         try (OutputStream output = Files.newOutputStream(file)) { properties.store(output, "LunaBridge Velocity configuration"); }
 

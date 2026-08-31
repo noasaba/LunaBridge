@@ -132,16 +132,34 @@ public final class DiscordConnector implements AutoCloseable {
         if (closed.get() || message.origin().kind() != OriginKind.MINECRAFT) return;
         List<String> channelIds = lunaChannelToDiscordChannels.get(message.channelId().value());
         if (channelIds == null || channelIds.isEmpty() || !receipts.markIfNew(message.messageId())) return;
-        String text = DiscordText.suppressMentions(minecraftRelayText(message));
+        String template = settings.option("discord.minecraft-chat-format",
+                DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
+        String text = DiscordText.suppressMentions(minecraftRelayText(message, template));
         channelIds.forEach(channelId -> send(text, channelId, false));
     }
 
-    static String minecraftRelayText(AcceptedMessage message) {
+    static String minecraftRelayText(AcceptedMessage message, String template) {
         String channelName = DiscordText.stripMinecraftLegacyFormatting(message.channelName());
         String author = DiscordText.stripMinecraftLegacyFormatting(authorName(message));
-        String content = DiscordText.stripMinecraftLegacyFormatting(message.content());
-        return "[" + channelName + "] " + author + ": " + content;
+        MinecraftChatParts content = splitMinecraftContent(message.content());
+        return format(template, Map.of(
+                "channel", channelName,
+                "username", author,
+                "message", content.message(),
+                "japanized", content.japanized()));
     }
+
+    private static MinecraftChatParts splitMinecraftContent(String content) {
+        int marker = content.lastIndexOf(" §6(");
+        if (marker >= 0 && content.endsWith(")")) {
+            String message = DiscordText.stripMinecraftLegacyFormatting(content.substring(0, marker));
+            String japanized = DiscordText.stripMinecraftLegacyFormatting(content.substring(marker));
+            return new MinecraftChatParts(message, japanized);
+        }
+        return new MinecraftChatParts(DiscordText.stripMinecraftLegacyFormatting(content), "");
+    }
+
+    private record MinecraftChatParts(String message, String japanized) { }
 
     public void notification(String type, Map<String, String> placeholders) {
         if (closed.get() || !Boolean.parseBoolean(settings.option("discord.notifications.enable." + type, "true"))) return;

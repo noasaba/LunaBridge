@@ -9,6 +9,9 @@ public record DiscordSettings(
         String token,
         Map<String, String> discordChannelToLunaChatChannelId,
         Map<String, String> options) {
+    public static final String DEFAULT_MINECRAFT_CHAT_FORMAT =
+            "[{channel}] {username}: {message}{japanized}";
+
     public DiscordSettings {
         token = Objects.requireNonNull(token, "token").trim();
         discordChannelToLunaChatChannelId = Map.copyOf(new LinkedHashMap<>(

@@ -125,10 +125,30 @@ class DiscordContractTest {
                         UUID.randomUUID(), "noa_berry", "§bnoa_berry"),
                 "backend", "aaa §6(あああ)", created, created.plus(Duration.ofMinutes(5)));
 
-        assertEquals("[global] noa_berry: aaa (あああ)", DiscordConnector.minecraftRelayText(message));
+        assertEquals("[global] noa_berry: aaa (あああ)", DiscordConnector.minecraftRelayText(message,
+                "[{channel}] {username}: {message}{japanized}"));
+        assertEquals("noa_berry @ global > aaa / (あああ)", DiscordConnector.minecraftRelayText(message,
+                "{username} @ {channel} > {message} /{japanized}"));
         assertEquals("§aglobal", message.channelName());
         assertEquals("aaa §6(あああ)", message.content());
         assertEquals("§bnoa_berry", ((com.github.ucchyocean.lunachat.api.MessageAuthor.Player) message.author()).displayName());
+    }
+
+    @Test void minecraftRelayLeavesJapanizedPlaceholderEmptyWhenSuffixIsAbsent() {
+        Instant created = Instant.parse("2026-08-25T00:00:00Z");
+        var message = new com.github.ucchyocean.lunachat.api.AcceptedMessage(
+                UUID.randomUUID(),
+                new com.github.ucchyocean.lunachat.api.ChannelId("550e8400-e29b-41d4-a716-446655440000"),
+                "global",
+                new com.github.ucchyocean.lunachat.api.MessageOrigin(
+                        com.github.ucchyocean.lunachat.api.OriginKind.MINECRAFT,
+                        "lunachat.minecraft", UUID.randomUUID().toString()),
+                new com.github.ucchyocean.lunachat.api.MessageAuthor.Player(
+                        UUID.randomUUID(), "Tomochan10", "Tomochan10"),
+                "lobby", "test", created, created.plus(Duration.ofMinutes(5)));
+
+        assertEquals("[global] Tomochan10: test", DiscordConnector.minecraftRelayText(message,
+                "[{channel}] {username}: {message}{japanized}"));
     }
 
     @Test void officialApiRecordConstructionUsesDiscordIdentityContract() {

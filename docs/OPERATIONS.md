@@ -5,13 +5,22 @@ LunaBridge is configured only with Discord connector settings and stable LunaCha
 Velocity configuration example:
 
 ```properties
-config-version=3
+config-version=4
 discord.token-file=/secure/path/discord-token
+discord.minecraft-chat-format=[{channel}] {username}: {message}{japanized}
 ```
 
 Then run `lunabridge setup 123456789012345678 global` from the server console. The command resolves the name or alias once, requires external publishing, saves the stable UUID mapping, and applies it live. It reports the Discord test as queued only after confirming that JDA is ready, the channel is known, the bot can talk there, and the outbound queue accepted the operation. Run `lunabridge doctor` to inspect API role/version, LunaChat network status, token presence, Discord readiness, and every mapping. Network `READY` is `OK`, `RELOADING` is `WAIT`, and all degraded or stopping states are `FAIL`. Administration is console-only.
 
 Multiple Discord channel IDs may map to the same stable LunaChat `ChannelId`; Minecraft messages fan out to every configured Discord destination.
+
+Minecraft-to-Discord chat text is controlled by `discord.minecraft-chat-format`
+on Velocity, or `discord.minecraft-chat-format` in Paper YAML. Available
+placeholders are `{channel}`, `{username}`, `{message}`, and `{japanized}`;
+double-brace forms such as `{{message}}` are accepted too. `{japanized}` is
+empty when LunaChat did not append a Japanese conversion, and otherwise
+contains the leading space and parentheses, so the default format does not
+leave extra punctuation.
 
 Inline `discord.token` remains backward compatible, but `discord.token-file` takes precedence and avoids copying the credential into generated configuration. Relative token-file paths are resolved from the plugin data directory. Paper standalone uses the equivalent YAML keys under `discord`.
 
