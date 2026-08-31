@@ -20,7 +20,10 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /** Paper standalone adapter; it never observes legacy chat events or owns Minecraft transport. */
 public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener {
@@ -28,6 +31,7 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     private Subscription subscription;
     private LunaChatIntegrationApi api;
     private PaperSettings settings;
+    private final Set<String> onlinePlayerNames = ConcurrentHashMap.newKeySet();
 
     @Override public void onEnable() {
         var command = getCommand("lunabridge");
@@ -43,7 +47,9 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                 api.channels().find(new ChannelId(channelId)).orElseThrow(
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
-            PlayerDirectory players = () -> Bukkit.getOnlinePlayers().stream().map(player -> player.getName()).toList();
+            onlinePlayerNames.clear();
+            Bukkit.getOnlinePlayers().forEach(player -> onlinePlayerNames.add(player.getName()));
+            PlayerDirectory players = () -> List.copyOf(onlinePlayerNames);
             discord = DiscordConnector.start(api, players, settings.discord, getSLF4JLogger());
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             Bukkit.getPluginManager().registerEvents(this, this);
@@ -56,11 +62,13 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     }
 
     @EventHandler public void onJoin(PlayerJoinEvent event) {
+        onlinePlayerNames.add(event.getPlayer().getName());
         if (discord != null) discord.notification("join", Map.of("player", event.getPlayer().getName(),
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) {
+        onlinePlayerNames.remove(event.getPlayer().getName());
         if (discord != null) discord.notification("quit", Map.of("player", event.getPlayer().getName(),
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
@@ -68,6 +76,7 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     @Override public void onDisable() {
         if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(Bukkit.getOnlinePlayers().size()), "max", "?"));
         closeBridge();
+        onlinePlayerNames.clear();
     }
 
     private void closeBridge() {

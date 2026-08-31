@@ -5,7 +5,9 @@ The deterministic test suite covers:
 - Frozen API v1 compilation and record construction;
 - API major, exact runtime role, and required capability validation;
 - `MINECRAFT`-only observer relay policy;
-- bounded receipt capacity and TTL behavior;
+- bounded receipt eviction and TTL behavior without new-message starvation;
+- fan-out preservation when multiple Discord channels map to one LunaChat channel;
+- `doctor` classification for every LunaChat network state;
 - Discord mention suppression, Minecraft legacy formatting removal, Unicode preservation, and surrogate-safe 2,000-character handling;
 - token-file precedence, schema 2 to 3 additive migration, stable-ID setup persistence, and external-publish setup refusal;
 - terminal external publish result handling and bounded retry infrastructure;

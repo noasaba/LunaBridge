@@ -17,6 +17,8 @@ import java.time.ZoneOffset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -41,7 +43,7 @@ class DiscordContractTest {
                 RuntimeRole.STANDALONE_AUTHORITY));
     }
 
-    @Test void receiptCacheExpiresAndNeverGrowsPastCapacity() {
+    @Test void receiptCacheEvictsOldestAndNeverDropsNewMessagesAtCapacity() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
         var clock = Clock.fixed(now, ZoneOffset.UTC);
         MessageReceiptCache cache = new MessageReceiptCache(2, Duration.ofSeconds(10), clock);
@@ -51,8 +53,39 @@ class DiscordContractTest {
         assertTrue(cache.markIfNew(first));
         assertFalse(cache.markIfNew(first));
         assertTrue(cache.markIfNew(second));
+        assertTrue(cache.markIfNew(third));
         assertFalse(cache.markIfNew(third));
+        assertTrue(cache.markIfNew(first));
         assertEquals(2, cache.size());
+    }
+
+    @Test void reverseMappingsPreserveEveryDiscordDestination() {
+        String stableId = "550e8400-e29b-41d4-a716-446655440000";
+        DiscordSettings settings = new DiscordSettings("token", Map.of(
+                "1307767610976243722", stableId,
+                "1307767610976243723", stableId), Map.of());
+
+        assertEquals(Set.of("1307767610976243722", "1307767610976243723"),
+                new HashSet<>(DiscordConnector.reverseMappings(settings).get(stableId)));
+    }
+
+    @Test void doctorClassifiesNonReadyNetworkStates() {
+        DiscordSettings settings = new DiscordSettings("token", Map.of(), Map.of());
+        assertTrue(BridgeAdministration.doctor(apiWithNetworkState(
+                        com.github.ucchyocean.lunachat.api.NetworkState.READY), settings, true, true)
+                .stream().anyMatch(line -> line.startsWith("OK network READY")));
+        assertTrue(BridgeAdministration.doctor(apiWithNetworkState(
+                        com.github.ucchyocean.lunachat.api.NetworkState.RELOADING), settings, true, true)
+                .stream().anyMatch(line -> line.startsWith("WAIT network RELOADING")));
+        assertTrue(BridgeAdministration.doctor(apiWithNetworkState(
+                        com.github.ucchyocean.lunachat.api.NetworkState.DEGRADED), settings, true, true)
+                .stream().anyMatch(line -> line.startsWith("FAIL network DEGRADED")));
+        assertTrue(BridgeAdministration.doctor(apiWithNetworkState(
+                        com.github.ucchyocean.lunachat.api.NetworkState.UNAVAILABLE), settings, true, true)
+                .stream().anyMatch(line -> line.startsWith("FAIL network UNAVAILABLE")));
+        assertTrue(BridgeAdministration.doctor(apiWithNetworkState(
+                        com.github.ucchyocean.lunachat.api.NetworkState.SHUTTING_DOWN), settings, true, true)
+                .stream().anyMatch(line -> line.startsWith("FAIL network SHUTTING_DOWN")));
     }
 
     @Test void discordTextDoesNotSplitSurrogatePairOrAllowMentions() {
@@ -186,6 +219,21 @@ class DiscordContractTest {
             }
             @Override public MessageGateway messages() { return null; }
             @Override public NetworkStatusService networkStatus() { return null; }
+        };
+    }
+
+    private static LunaChatIntegrationApi apiWithNetworkState(
+            com.github.ucchyocean.lunachat.api.NetworkState state) {
+        return new LunaChatIntegrationApi() {
+            @Override public ApiVersion apiVersion() { return new ApiVersion(1, 0, 0); }
+            @Override public RuntimeRole runtimeRole() { return RuntimeRole.NETWORK_AUTHORITY; }
+            @Override public Set<Capability> capabilities() { return EnumSet.allOf(Capability.class); }
+            @Override public ChannelQueryService channels() { return null; }
+            @Override public MessageGateway messages() { return null; }
+            @Override public NetworkStatusService networkStatus() {
+                return () -> new com.github.ucchyocean.lunachat.api.NetworkStatus(
+                        state, state.name(), Instant.parse("2026-08-31T00:00:00Z"));
+            }
         };
     }
 }

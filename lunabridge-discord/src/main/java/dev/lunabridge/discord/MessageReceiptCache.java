@@ -25,7 +25,13 @@ public final class MessageReceiptCache {
     public synchronized boolean markIfNew(UUID messageId) {
         cleanup(Instant.now(clock));
         if (receipts.containsKey(messageId)) return false;
-        if (receipts.size() >= capacity) return false;
+        if (receipts.size() >= capacity) {
+            Iterator<UUID> oldest = receipts.keySet().iterator();
+            if (oldest.hasNext()) {
+                oldest.next();
+                oldest.remove();
+            }
+        }
         receipts.put(messageId, Instant.now(clock).plus(ttl));
         return true;
     }

@@ -23,7 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,7 +42,7 @@ public final class DiscordConnector implements AutoCloseable {
     private final PlayerDirectory players;
     private volatile DiscordSettings settings;
     private final Logger logger;
-    private volatile Map<String, String> lunaChannelToDiscordChannel;
+    private volatile Map<String, List<String>> lunaChannelToDiscordChannels;
     private final MessageReceiptCache receipts = new MessageReceiptCache(4_096, Duration.ofHours(24), Clock.systemUTC());
     private final AtomicInteger outboundInFlight = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
@@ -66,7 +66,7 @@ public final class DiscordConnector implements AutoCloseable {
         this.settings = settings;
         this.logger = logger;
         this.jda = jda;
-        this.lunaChannelToDiscordChannel = reverseMappings(settings);
+        this.lunaChannelToDiscordChannels = reverseMappings(settings);
         this.publishRetries = new BoundedPublishRetryQueue(MAX_PUBLISH_PENDING, MAX_PUBLISH_ATTEMPTS,
                 request -> lunaChat.messages().publishExternal(request), retryExecutor, Clock.systemUTC());
     }
@@ -91,8 +91,7 @@ public final class DiscordConnector implements AutoCloseable {
                 @Override public void onSlashCommandInteraction(@NotNull SlashCommandInteractionEvent event) { listenerTarget.handleSlash(event); }
             });
             if (jda.getStatus() == JDA.Status.CONNECTED) result.markReady();
-            if (playersSlashEnabled(settings)) jda.upsertCommand(Commands.slash("players", "Show online Minecraft players"))
-                    .queue(ignored -> { }, error -> logger.warn("Could not register LunaBridge /players command"));
+            synchronizePlayersSlashCommand(jda, settings, logger);
             logger.info("LunaBridge Discord gateway started as the platform-independent connector.");
             return result;
         } catch (RuntimeException failed) {
@@ -111,8 +110,10 @@ public final class DiscordConnector implements AutoCloseable {
         if (!settings.token().equals(updated.token())) {
             throw new IllegalArgumentException("Discord token changes require a plugin restart");
         }
+        boolean slashModeChanged = playersSlashEnabled(settings) != playersSlashEnabled(updated);
         settings = updated;
-        lunaChannelToDiscordChannel = reverseMappings(updated);
+        lunaChannelToDiscordChannels = reverseMappings(updated);
+        if (slashModeChanged && jda != null) synchronizePlayersSlashCommand(jda, updated, logger);
     }
 
     public boolean hasGateway() { return jda != null && !closed.get(); }
@@ -120,17 +121,19 @@ public final class DiscordConnector implements AutoCloseable {
     public boolean isReady() { return ready && !closed.get(); }
 
     public boolean sendSetupTest(String discordChannelId, String channelName) {
-        if (!hasGateway()) return false;
-        send("✅ LunaBridge mapped this Discord channel to LunaChat "
+        if (!isReady()) return false;
+        MessageChannel channel = jda.getChannelById(MessageChannel.class, discordChannelId);
+        if (channel == null || !channel.canTalk()) return false;
+        return send("✅ LunaBridge mapped this Discord channel to LunaChat "
                 + DiscordText.suppressMentions(channelName) + ".", discordChannelId, false);
-        return true;
     }
 
     public void relayMinecraft(AcceptedMessage message) {
         if (closed.get() || message.origin().kind() != OriginKind.MINECRAFT) return;
-        String channelId = lunaChannelToDiscordChannel.get(message.channelId().value());
-        if (channelId == null || !receipts.markIfNew(message.messageId())) return;
-        send(DiscordText.suppressMentions(minecraftRelayText(message)), channelId, false);
+        List<String> channelIds = lunaChannelToDiscordChannels.get(message.channelId().value());
+        if (channelIds == null || channelIds.isEmpty() || !receipts.markIfNew(message.messageId())) return;
+        String text = DiscordText.suppressMentions(minecraftRelayText(message));
+        channelIds.forEach(channelId -> send(text, channelId, false));
     }
 
     static String minecraftRelayText(AcceptedMessage message) {
@@ -193,11 +196,23 @@ public final class DiscordConnector implements AutoCloseable {
     }
 
     private void handleSlash(SlashCommandInteractionEvent event) {
-        if (!"players".equals(event.getName()) || !playersSlashEnabled(settings)
-                || !isAllowedCommandChannel(settings, event.getChannel().getId())) return;
+        if (!"players".equals(event.getName())) return;
+        if (!playersSlashEnabled(settings)) {
+            respondSlash(event, "The LunaBridge /players command is disabled.");
+            return;
+        }
+        if (!isAllowedCommandChannel(settings, event.getChannel().getId())) {
+            respondSlash(event, "LunaBridge commands are not enabled in this channel.");
+            return;
+        }
+        respondSlash(event, playersText());
+    }
+
+    private void respondSlash(SlashCommandInteractionEvent event, String text) {
         if (!reserve()) return;
         try {
-            event.reply(DiscordText.fit(playersText())).setEphemeral(true).setAllowedMentions(Collections.emptySet())
+            event.reply(DiscordText.fit(DiscordText.suppressMentions(text))).setEphemeral(true)
+                    .setAllowedMentions(Collections.emptySet())
                     .queue(ignored -> release(), failed -> { release(); logger.warn("LunaBridge Discord slash response failed"); });
         } catch (RuntimeException unavailable) { release(); logger.warn("LunaBridge Discord slash response unavailable"); }
     }
@@ -210,17 +225,18 @@ public final class DiscordConnector implements AutoCloseable {
         } catch (RuntimeException unavailable) { release(); logger.warn("LunaBridge Discord response unavailable"); }
     }
 
-    private void send(String text, String channelId, boolean allowConfiguredRole) {
-        if (jda == null || !reserve()) return;
+    private boolean send(String text, String channelId, boolean allowConfiguredRole) {
+        if (jda == null || !reserve()) return false;
         String safe = DiscordText.fit(text);
         synchronized (pendingUntilReady) {
-            if (closed.get()) { release(); return; }
+            if (closed.get()) { release(); return false; }
             if (!ready) {
                 pendingUntilReady.add(new PendingOutbound(channelId, safe, allowConfiguredRole));
-                return;
+                return true;
             }
         }
         dispatch(channelId, safe, allowConfiguredRole);
+        return true;
     }
 
     private void markReady() {
@@ -315,9 +331,24 @@ public final class DiscordConnector implements AutoCloseable {
         return "Unknown";
     }
 
-    private static Map<String, String> reverseMappings(DiscordSettings settings) {
-        Map<String, String> reverse = new HashMap<>();
-        settings.discordChannelToLunaChatChannelId().forEach((discord, luna) -> reverse.put(luna, discord));
+    static Map<String, List<String>> reverseMappings(DiscordSettings settings) {
+        Map<String, List<String>> reverse = new LinkedHashMap<>();
+        settings.discordChannelToLunaChatChannelId().forEach((discord, luna) ->
+                reverse.computeIfAbsent(luna, ignored -> new ArrayList<>()).add(discord));
+        reverse.replaceAll((ignored, discordChannels) -> List.copyOf(discordChannels));
         return Map.copyOf(reverse);
+    }
+
+    private static void synchronizePlayersSlashCommand(JDA jda, DiscordSettings settings, Logger logger) {
+        if (playersSlashEnabled(settings)) {
+            jda.upsertCommand(Commands.slash("players", "Show online Minecraft players"))
+                    .queue(ignored -> { }, error -> logger.warn("Could not register LunaBridge /players command"));
+            return;
+        }
+        jda.retrieveCommands().queue(commands -> commands.stream()
+                        .filter(command -> "players".equals(command.getName()))
+                        .forEach(command -> jda.deleteCommandById(command.getId()).queue(
+                                ignored -> { }, error -> logger.warn("Could not remove stale LunaBridge /players command"))),
+                error -> logger.warn("Could not inspect Discord commands for stale LunaBridge /players command"));
     }
 }

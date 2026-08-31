@@ -3,6 +3,7 @@ package dev.lunabridge.discord;
 import com.github.ucchyocean.lunachat.api.ChannelDescriptor;
 import com.github.ucchyocean.lunachat.api.ChannelId;
 import com.github.ucchyocean.lunachat.api.LunaChatIntegrationApi;
+import com.github.ucchyocean.lunachat.api.NetworkState;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +29,12 @@ public final class BridgeAdministration {
         List<String> lines = new ArrayList<>();
         lines.add("OK LunaChat API " + api.apiVersion() + " role=" + api.runtimeRole());
         var network = api.networkStatus().current();
-        lines.add("OK network " + network.state() + " (" + network.diagnosticCode() + ")");
+        String networkLevel = switch (network.state()) {
+            case READY -> "OK";
+            case RELOADING -> "WAIT";
+            case DEGRADED, UNAVAILABLE, SHUTTING_DOWN -> "FAIL";
+        };
+        lines.add(networkLevel + " network " + network.state() + " (" + network.diagnosticCode() + ")");
         lines.add((settings.token().isBlank() || settings.token().equals("PUT_DISCORD_BOT_TOKEN_HERE")
                 ? "FAIL Discord token is not configured" : "OK Discord token configured"));
         lines.add(gatewayReady ? "OK Discord gateway ready"

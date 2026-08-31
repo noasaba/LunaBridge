@@ -1,4 +1,4 @@
-# LunaBridge-Paper never owns Minecraft chat commands or a Discord client.
+# LunaBridge-Paper owns the standalone Discord connector, never Minecraft chat or network transport.
 config-version: 3
 discord:
   token: "PUT_DISCORD_BOT_TOKEN_HERE"
