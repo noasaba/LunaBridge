@@ -313,8 +313,20 @@ public final class DiscordConnector implements AutoCloseable {
     }
 
     private String playersText() {
-        List<String> names = players.onlinePlayerNames().stream().sorted().toList();
-        return names.isEmpty() ? "No players online." : "Online (" + names.size() + "): " + String.join(", ", names);
+        return playersText(players);
+    }
+
+    static String playersText(PlayerDirectory players) {
+        List<PlayerDirectory.PlayerGroup> groups = players.onlinePlayersByServer().stream()
+                .filter(group -> !group.playerNames().isEmpty())
+                .sorted(java.util.Comparator.comparing(PlayerDirectory.PlayerGroup::serverName))
+                .toList();
+        if (groups.isEmpty()) return "現在ログイン中のプレイヤーはいません";
+        String body = groups.stream()
+                .map(group -> group.serverName() + " (" + group.playerNames().size() + "): "
+                        + String.join(" ", group.playerNames().stream().sorted().toList()))
+                .collect(java.util.stream.Collectors.joining("\n"));
+        return "ログイン中のプレイヤー\n```\n" + body + "\n```";
     }
 
     public static boolean textPlayersEnabled(DiscordSettings settings) {

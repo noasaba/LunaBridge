@@ -57,7 +57,14 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
             refreshVisibilityProvider();
-            PlayerDirectory players = this::publicPlayerNames;
+            String serverName = Bukkit.getServer().getName();
+            PlayerDirectory players = new PlayerDirectory() {
+                @Override public List<String> onlinePlayerNames() { return publicPlayerNames(); }
+                @Override public List<PlayerGroup> onlinePlayersByServer() {
+                    List<String> names = publicPlayerNames();
+                    return names.isEmpty() ? List.of() : List.of(new PlayerGroup(serverName, names));
+                }
+            };
             discord = DiscordConnector.start(api, players, settings.discord, getSLF4JLogger());
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             Bukkit.getPluginManager().registerEvents(this, this);

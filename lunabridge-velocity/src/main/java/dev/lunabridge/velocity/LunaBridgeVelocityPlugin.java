@@ -27,6 +27,8 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.List;
@@ -40,12 +42,15 @@ public final class LunaBridgeVelocityPlugin {
     private final Logger logger;
     private final Path dataDirectory;
     private final Set<UUID> connected = ConcurrentHashMap.newKeySet();
+    private final Map<UUID, PlayerLocation> playerLocations = new ConcurrentHashMap<>();
     private DiscordConnector discord;
     private Subscription subscription;
     private SeenPlayerStore seenPlayers;
     private VelocitySettings settings;
     private LunaChatIntegrationApi api;
     private SVSyncVisibilityProvider svsync;
+
+    private record PlayerLocation(String playerName, String serverName) { }
 
     @Inject public LunaBridgeVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
         this.proxy = proxy;
@@ -73,7 +78,11 @@ public final class LunaBridgeVelocityPlugin {
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
             seenPlayers = new SeenPlayerStore(dataDirectory);
-            PlayerDirectory players = this::publicPlayerNames;
+            captureConnectedPlayers();
+            PlayerDirectory players = new PlayerDirectory() {
+                @Override public List<String> onlinePlayerNames() { return publicPlayerNames(); }
+                @Override public List<PlayerGroup> onlinePlayersByServer() { return publicPlayersByServer(); }
+            };
             discord = DiscordConnector.start(api, players, settings.discord, logger);
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             discord.notification("startup", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
@@ -87,6 +96,7 @@ public final class LunaBridgeVelocityPlugin {
     @Subscribe public void connected(ServerConnectedEvent event) {
         if (settings == null || discord == null) return;
         String to = event.getServer().getServerInfo().getName();
+        playerLocations.put(event.getPlayer().getUniqueId(), new PlayerLocation(event.getPlayer().getUsername(), to));
         Map<String, String> values = values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", to);
         if (event.getPreviousServer().isEmpty()) {
             connected.add(event.getPlayer().getUniqueId());
@@ -100,6 +110,7 @@ public final class LunaBridgeVelocityPlugin {
     }
 
     @Subscribe public void disconnected(DisconnectEvent event) {
+        playerLocations.remove(event.getPlayer().getUniqueId());
         if (discord != null && connected.remove(event.getPlayer().getUniqueId()) && isPublic(event.getPlayer().getUniqueId())) {
             discord.notification("quit", values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", ""));
         }
@@ -118,6 +129,7 @@ public final class LunaBridgeVelocityPlugin {
         api = null;
         svsync = null;
         connected.clear();
+        playerLocations.clear();
     }
 
     private void closeBridge() {
@@ -147,13 +159,30 @@ public final class LunaBridgeVelocityPlugin {
     }
 
     private List<String> publicPlayerNames() {
-        return proxy.getAllPlayers().stream()
-                .filter(player -> isPublic(player.getUniqueId()))
-                .map(player -> player.getUsername()).toList();
+        return playerLocations.entrySet().stream()
+                .filter(entry -> isPublic(entry.getKey()))
+                .map(entry -> entry.getValue().playerName()).toList();
     }
 
     private int publicPlayerCount() {
-        return (int) proxy.getAllPlayers().stream().filter(player -> isPublic(player.getUniqueId())).count();
+        return publicPlayerNames().size();
+    }
+
+    private List<PlayerDirectory.PlayerGroup> publicPlayersByServer() {
+        Map<String, List<String>> grouped = new TreeMap<>();
+        playerLocations.forEach((playerId, location) -> {
+            if (isPublic(playerId)) {
+                grouped.computeIfAbsent(location.serverName(), ignored -> new ArrayList<>()).add(location.playerName());
+            }
+        });
+        return grouped.entrySet().stream()
+                .map(entry -> new PlayerDirectory.PlayerGroup(entry.getKey(), entry.getValue())).toList();
+    }
+
+    private void captureConnectedPlayers() {
+        proxy.getAllPlayers().forEach(player -> player.getCurrentServer().ifPresent(server ->
+                playerLocations.put(player.getUniqueId(), new PlayerLocation(player.getUsername(),
+                        server.getServerInfo().getName()))));
     }
 
     private final class AdministrationCommand implements SimpleCommand {

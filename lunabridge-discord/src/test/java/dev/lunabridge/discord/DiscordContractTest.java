@@ -88,6 +88,25 @@ class DiscordContractTest {
                 .stream().anyMatch(line -> line.startsWith("FAIL network SHUTTING_DOWN")));
     }
 
+    @Test void playersTextGroupsOnlyPublicPlayersByServer() {
+        PlayerDirectory directory = new PlayerDirectory() {
+            @Override public java.util.List<String> onlinePlayerNames() { return java.util.List.of("ignored"); }
+            @Override public java.util.List<PlayerGroup> onlinePlayersByServer() {
+                return java.util.List.of(new PlayerGroup("survival", java.util.List.of("Zoe", "Alice")),
+                        new PlayerGroup("lobby", java.util.List.of()),
+                        new PlayerGroup("creative", java.util.List.of("Bob")));
+            }
+        };
+
+        assertEquals("ログイン中のプレイヤー\n```\ncreative (1): Bob\nsurvival (2): Alice Zoe\n```",
+                DiscordConnector.playersText(directory));
+    }
+
+    @Test void playersTextUsesOnlyTheRequiredEmptyState() {
+        assertEquals("現在ログイン中のプレイヤーはいません",
+                DiscordConnector.playersText(() -> java.util.List.of()));
+    }
+
     @Test void discordTextDoesNotSplitSurrogatePairOrAllowMentions() {
         String fitted = DiscordText.fit("a".repeat(1_998) + "😀tail");
         assertTrue(fitted.length() <= DiscordText.MAX_LENGTH);
