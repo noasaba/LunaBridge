@@ -2,6 +2,10 @@
 
 LunaBridge is a Discord integration consumer for LunaChat. The boundary is:
 
+日本語の導入・運用・API利用方法は
+[LunaChat 4 + LunaBridge 統合導入・API利用ガイド](docs/LUNACHAT_LUNABRIDGE_GUIDE_JA.md)
+にまとめています。
+
 > LunaChat owns Minecraft chat and Minecraft inter-server networking. LunaBridge owns Discord integration only.
 
 Supported topologies:
