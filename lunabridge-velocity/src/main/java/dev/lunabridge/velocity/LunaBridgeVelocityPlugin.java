@@ -28,11 +28,13 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.List;
 
 /** Velocity platform adapter; LunaChat owns all Minecraft network authority and transport. */
 @Plugin(id = "lunabridge-velocity", name = "LunaBridge Velocity", version = LunaBridgeBuildVersion.VERSION,
-        authors = {"LunaBridge"}, dependencies = {@Dependency(id = "lunachat", optional = false)})
+        authors = {"LunaBridge"}, dependencies = {
+        @Dependency(id = "lunachat", optional = false), @Dependency(id = "svsync", optional = true)})
 public final class LunaBridgeVelocityPlugin {
     private final ProxyServer proxy;
     private final Logger logger;
@@ -43,6 +45,7 @@ public final class LunaBridgeVelocityPlugin {
     private SeenPlayerStore seenPlayers;
     private VelocitySettings settings;
     private LunaChatIntegrationApi api;
+    private SVSyncVisibilityProvider svsync;
 
     @Inject public LunaBridgeVelocityPlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
         this.proxy = proxy;
@@ -61,6 +64,8 @@ public final class LunaBridgeVelocityPlugin {
             api = provider.current().orElseThrow(
                     () -> new IllegalStateException("LunaChat Integration API v1 is not currently available"));
             AuthorityValidation.require(api, RuntimeRole.NETWORK_AUTHORITY);
+            svsync = SVSyncVisibilityProvider.find(proxy, logger).orElse(null);
+            if (svsync != null) logger.info("SVSync public presence filtering enabled.");
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("lunabridge")
                     .plugin(this).build(), new AdministrationCommand());
             for (String channelId : settings.discord.discordChannelToLunaChatChannelId().values()) {
@@ -68,10 +73,10 @@ public final class LunaBridgeVelocityPlugin {
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
             seenPlayers = new SeenPlayerStore(dataDirectory);
-            PlayerDirectory players = () -> proxy.getAllPlayers().stream().map(player -> player.getUsername()).toList();
+            PlayerDirectory players = this::publicPlayerNames;
             discord = DiscordConnector.start(api, players, settings.discord, logger);
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
-            discord.notification("startup", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
+            discord.notification("startup", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
             logger.info("LunaBridge enabled as a Discord-only LunaChat API consumer.");
         } catch (IOException | RuntimeException failure) {
             closeBridge();
@@ -85,22 +90,23 @@ public final class LunaBridgeVelocityPlugin {
         Map<String, String> values = values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", to);
         if (event.getPreviousServer().isEmpty()) {
             connected.add(event.getPlayer().getUniqueId());
-            try { discord.notification(seenPlayers != null && seenPlayers.markFirst(event.getPlayer().getUniqueId()) ? "first-login" : "login", values); }
-            catch (IOException failure) { logger.error("Could not persist first-login state", failure); }
+            notifyJoinAfterSVSyncState(event.getPlayer().getUniqueId(), values);
         } else {
             String from = event.getPreviousServer().orElseThrow().getServerInfo().getName();
-            if (!from.equals(to)) discord.notification("server-switch", values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), from, to));
+            if (!from.equals(to) && isPublic(event.getPlayer().getUniqueId())) {
+                discord.notification("server-switch", values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), from, to));
+            }
         }
     }
 
     @Subscribe public void disconnected(DisconnectEvent event) {
-        if (discord != null && connected.remove(event.getPlayer().getUniqueId())) {
+        if (discord != null && connected.remove(event.getPlayer().getUniqueId()) && isPublic(event.getPlayer().getUniqueId())) {
             discord.notification("quit", values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", ""));
         }
     }
 
     @Subscribe public void shutdown(ProxyShutdownEvent event) {
-        if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(proxy.getPlayerCount()), "max", "?"));
+        if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
         cleanup();
     }
 
@@ -110,6 +116,7 @@ public final class LunaBridgeVelocityPlugin {
         seenPlayers = null;
         settings = null;
         api = null;
+        svsync = null;
         connected.clear();
     }
 
@@ -122,6 +129,31 @@ public final class LunaBridgeVelocityPlugin {
 
     private static Map<String, String> values(String player, UUID uuid, String from, String server) {
         return Map.of("player", player, "uuid", uuid.toString(), "from", from, "server", server);
+    }
+
+    private void notifyJoinAfterSVSyncState(UUID playerId, Map<String, String> values) {
+        proxy.getScheduler().buildTask(this, () -> {
+            if (discord == null || !connected.contains(playerId) || !isPublic(playerId)) return;
+            try {
+                discord.notification(seenPlayers != null && seenPlayers.markFirst(playerId) ? "first-login" : "login", values);
+            } catch (IOException failure) {
+                logger.error("Could not persist first-login state", failure);
+            }
+        }).delay(400, TimeUnit.MILLISECONDS).schedule();
+    }
+
+    private boolean isPublic(UUID playerId) {
+        return svsync == null || svsync.isPublic(playerId);
+    }
+
+    private List<String> publicPlayerNames() {
+        return proxy.getAllPlayers().stream()
+                .filter(player -> isPublic(player.getUniqueId()))
+                .map(player -> player.getUsername()).toList();
+    }
+
+    private int publicPlayerCount() {
+        return (int) proxy.getAllPlayers().stream().filter(player -> isPublic(player.getUniqueId())).count();
     }
 
     private final class AdministrationCommand implements SimpleCommand {
