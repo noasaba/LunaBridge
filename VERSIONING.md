@@ -6,7 +6,7 @@ LunaBridgeの製品バージョンはSemVer形式で管理し、`gradle.properti
 
 | 対象 | 現在値 | 正本・用途 |
 | --- | --- | --- |
-| 製品 | `0.3.0-beta.6` | `gradle.properties`の`projectVersion` |
+| 製品 | `0.3.0-beta.7` | `gradle.properties`の`projectVersion` |
 | Wire protocol | LunaChat側管理 | LunaBridgeはMinecraft transportを所有しない |
 | Config schema | `4` | Discord Minecraftチャット書式テンプレート対応 |
 | Paper API | `26.2` / build 117 | コンパイル対象および`plugin.yml`の最低API |

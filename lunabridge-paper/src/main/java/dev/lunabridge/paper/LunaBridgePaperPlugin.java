@@ -10,7 +10,11 @@ import dev.lunabridge.discord.DiscordConnector;
 import dev.lunabridge.discord.PlayerDirectory;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.Event;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.EventExecutor;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.RegisteredServiceProvider;
@@ -23,6 +27,7 @@ import org.jetbrains.annotations.NotNull;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Paper standalone adapter; it never observes legacy chat events or owns Minecraft transport. */
@@ -31,7 +36,8 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     private Subscription subscription;
     private LunaChatIntegrationApi api;
     private PaperSettings settings;
-    private final Set<String> onlinePlayerNames = ConcurrentHashMap.newKeySet();
+    private final Set<UUID> publiclyOnline = ConcurrentHashMap.newKeySet();
+    private PublicVisibilityProvider visibilityProvider = new DefaultVisibilityProvider();
 
     @Override public void onEnable() {
         var command = getCommand("lunabridge");
@@ -47,13 +53,16 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                 api.channels().find(new ChannelId(channelId)).orElseThrow(
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
-            onlinePlayerNames.clear();
-            Bukkit.getOnlinePlayers().forEach(player -> onlinePlayerNames.add(player.getName()));
-            PlayerDirectory players = () -> List.copyOf(onlinePlayerNames);
+            visibilityProvider = createVisibilityProvider();
+            publiclyOnline.clear();
+            Bukkit.getOnlinePlayers().forEach(player -> {
+                if (visibilityProvider.isPublic(player)) publiclyOnline.add(player.getUniqueId());
+            });
+            PlayerDirectory players = this::publicPlayerNames;
             discord = DiscordConnector.start(api, players, settings.discord, getSLF4JLogger());
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             Bukkit.getPluginManager().registerEvents(this, this);
-            discord.notification("startup", Map.of("online", Integer.toString(Bukkit.getOnlinePlayers().size()), "max", "?"));
+            discord.notification("startup", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
             getLogger().info("LunaBridge Paper standalone enabled as a Discord-only LunaChat API consumer.");
         } catch (RuntimeException failure) {
             closeBridge();
@@ -62,21 +71,66 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     }
 
     @EventHandler public void onJoin(PlayerJoinEvent event) {
-        onlinePlayerNames.add(event.getPlayer().getName());
+        if (!visibilityProvider.isPublic(event.getPlayer()) || !publiclyOnline.add(event.getPlayer().getUniqueId())) return;
         if (discord != null) discord.notification("join", Map.of("player", event.getPlayer().getName(),
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) {
-        onlinePlayerNames.remove(event.getPlayer().getName());
+        if (!publiclyOnline.remove(event.getPlayer().getUniqueId())) return;
         if (discord != null) discord.notification("quit", Map.of("player", event.getPlayer().getName(),
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
 
+    private PublicVisibilityProvider createVisibilityProvider() {
+        if (!Bukkit.getPluginManager().isPluginEnabled("SuperVanish")
+                && !Bukkit.getPluginManager().isPluginEnabled("PremiumVanish")) {
+            return new DefaultVisibilityProvider();
+        }
+        try {
+            PublicVisibilityProvider provider = new SuperVanishVisibilityProvider();
+            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerHideEvent", false);
+            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerShowEvent", true);
+            getLogger().info("SuperVanish public presence integration enabled.");
+            return provider;
+        } catch (IllegalStateException | LinkageError failure) {
+            getLogger().warning("Vanish plugin detected but its public API is unavailable; public presence filtering is disabled.");
+            return new DefaultVisibilityProvider();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void registerVanishEvent(String className, boolean shown) {
+        try {
+            Class<? extends Event> eventType = (Class<? extends Event>) Class.forName(className);
+            EventExecutor executor = (listener, event) -> handleVanishEvent(event, shown);
+            Bukkit.getPluginManager().registerEvent(eventType, this, EventPriority.MONITOR, executor, this, true);
+        } catch (ClassNotFoundException | LinkageError missingEvent) {
+            throw new IllegalStateException("Missing SuperVanish event " + className, missingEvent);
+        }
+    }
+
+    private void handleVanishEvent(Event event, boolean shown) {
+        try {
+            Player player = (Player) event.getClass().getMethod("getPlayer").invoke(event);
+            if (!player.isOnline()) return;
+            if (shown && visibilityProvider.isPublic(player)) publiclyOnline.add(player.getUniqueId());
+            else publiclyOnline.remove(player.getUniqueId());
+        } catch (ReflectiveOperationException | ClassCastException failure) {
+            getLogger().warning("Could not read player from vanish event: " + failure.getMessage());
+        }
+    }
+
+    private List<String> publicPlayerNames() {
+        return Bukkit.getOnlinePlayers().stream()
+                .filter(player -> publiclyOnline.contains(player.getUniqueId()))
+                .map(Player::getName).toList();
+    }
+
     @Override public void onDisable() {
-        if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(Bukkit.getOnlinePlayers().size()), "max", "?"));
+        if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
         closeBridge();
-        onlinePlayerNames.clear();
+        publiclyOnline.clear();
     }
 
     private void closeBridge() {

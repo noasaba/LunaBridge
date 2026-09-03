@@ -5,6 +5,7 @@ api-version: '26.2'
 description: Discord integration for LunaChat standalone authority
 author: LunaBridge
 depend: [LunaChat]
+softdepend: [SuperVanish, PremiumVanish]
 commands:
   lunabridge:
     description: Configure and diagnose LunaBridge
