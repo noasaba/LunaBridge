@@ -180,6 +180,24 @@ class DiscordContractTest {
         assertEquals("123", request.identity().value());
     }
 
+    @Test void externalPublishDiagnosticsCorrelateAdmissionWithoutLoggingContent() {
+        var request = new com.github.ucchyocean.lunachat.api.ExternalMessageRequest(
+                new com.github.ucchyocean.lunachat.api.ChannelId("550e8400-e29b-41d4-a716-446655440000"),
+                new com.github.ucchyocean.lunachat.api.ExternalMessageIdentity("lunabridge:discord", "123"),
+                new com.github.ucchyocean.lunachat.api.MessageAuthor.External("lunabridge:discord", "456", "Alice"),
+                "do not log this content", Instant.parse("2026-01-01T00:00:00Z"), Duration.ofMinutes(5));
+        UUID logicalMessageId = UUID.fromString("650e8400-e29b-41d4-a716-446655440000");
+        var result = new com.github.ucchyocean.lunachat.api.ExternalPublishResult(
+                com.github.ucchyocean.lunachat.api.PublishStatus.ACCEPTED, logicalMessageId, false, "ACCEPTED");
+
+        String diagnostic = DiscordConnector.externalPublishResultDiagnostic(request, result);
+        assertTrue(diagnostic.contains("channelId=550e8400-e29b-41d4-a716-446655440000"));
+        assertTrue(diagnostic.contains("identity=lunabridge:discord:123"));
+        assertTrue(diagnostic.contains("logicalMessageId=" + logicalMessageId));
+        assertTrue(diagnostic.contains("clientDeliveryConfirmed=false"));
+        assertFalse(diagnostic.contains("do not log this content"));
+    }
+
     @Test void tokenFileTakesPrecedenceAndRejectsMultipleLines() throws Exception {
         Path token = temporaryDirectory.resolve("discord.token");
         Files.writeString(token, "file-token\n");

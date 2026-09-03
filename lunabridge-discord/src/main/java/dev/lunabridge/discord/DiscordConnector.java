@@ -2,6 +2,7 @@ package dev.lunabridge.discord;
 
 import com.github.ucchyocean.lunachat.api.AcceptedMessage;
 import com.github.ucchyocean.lunachat.api.ExternalMessageRequest;
+import com.github.ucchyocean.lunachat.api.ExternalPublishResult;
 import com.github.ucchyocean.lunachat.api.LunaChatIntegrationApi;
 import com.github.ucchyocean.lunachat.api.MessageAuthor;
 import com.github.ucchyocean.lunachat.api.OriginKind;
@@ -28,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -68,7 +70,7 @@ public final class DiscordConnector implements AutoCloseable {
         this.jda = jda;
         this.lunaChannelToDiscordChannels = reverseMappings(settings);
         this.publishRetries = new BoundedPublishRetryQueue(MAX_PUBLISH_PENDING, MAX_PUBLISH_ATTEMPTS,
-                request -> lunaChat.messages().publishExternal(request), retryExecutor, Clock.systemUTC());
+                this::publishExternalWithDiagnostics, retryExecutor, Clock.systemUTC());
     }
 
     public static DiscordConnector start(LunaChatIntegrationApi lunaChat, PlayerDirectory players,
@@ -211,6 +213,44 @@ public final class DiscordConnector implements AutoCloseable {
         } catch (IllegalArgumentException invalid) {
             logger.warn("Rejected invalid Discord bridge message: {}", invalid.getMessage());
         }
+    }
+
+    private CompletionStage<ExternalPublishResult> publishExternalWithDiagnostics(ExternalMessageRequest request) {
+        logger.info("LunaBridge external publish request: {}", externalPublishRequestDiagnostic(request));
+        CompletionStage<ExternalPublishResult> stage;
+        try {
+            stage = lunaChat.messages().publishExternal(request);
+        } catch (RuntimeException failure) {
+            logger.warn("LunaBridge external publish threw before admission: {}", externalPublishRequestDiagnostic(request), failure);
+            throw failure;
+        }
+        stage.whenComplete((result, failure) -> {
+            if (failure != null) {
+                logger.warn("LunaBridge external publish failed before admission result: {}",
+                        externalPublishRequestDiagnostic(request), failure);
+            } else if (result == null) {
+                logger.warn("LunaBridge external publish returned no admission result: {}",
+                        externalPublishRequestDiagnostic(request));
+            } else {
+                logger.info("LunaBridge external publish admission result: {}",
+                        externalPublishResultDiagnostic(request, result));
+            }
+        });
+        return stage;
+    }
+
+    static String externalPublishRequestDiagnostic(ExternalMessageRequest request) {
+        return "channelId=" + request.channelId().value()
+                + " identity=" + request.identity().namespace() + ":" + request.identity().value();
+    }
+
+    static String externalPublishResultDiagnostic(ExternalMessageRequest request, ExternalPublishResult result) {
+        return externalPublishRequestDiagnostic(request)
+                + " admissionStatus=" + result.status()
+                + " logicalMessageId=" + (result.messageId() == null ? "none" : result.messageId())
+                + " retryable=" + result.retryable()
+                + " diagnostic=" + result.diagnosticCode()
+                + " clientDeliveryConfirmed=false";
     }
 
     private void handleSlash(SlashCommandInteractionEvent event) {
