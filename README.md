@@ -61,4 +61,4 @@ lunabridge doctor
 
 `setup` resolves the name once through the Frozen API, refuses channels that do not accept external messages, persists only the stable `ChannelId`, and applies the mapping without reconnecting JDA. Its Discord test is reported as queued only when the gateway is ready, the channel exists in JDA's cache, the bot can talk there, and the bounded outbound queue accepts it. Both administration commands are console-only.
 
-The product version is `0.3.0-beta.8`, generated from `gradle.properties`.
+The product version is `0.3.0-beta.9`, generated from `gradle.properties`.

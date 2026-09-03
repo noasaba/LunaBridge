@@ -21,7 +21,7 @@ public final class SuperVanishVisibilityProvider implements PublicVisibilityProv
     @Override public boolean isPublic(Player player) {
         try {
             return !((Boolean) isInvisible.invoke(null, player));
-        } catch (IllegalAccessException | InvocationTargetException | ClassCastException failure) {
+        } catch (IllegalAccessException | InvocationTargetException | ClassCastException | LinkageError failure) {
             throw new IllegalStateException("SuperVanish visibility lookup failed", failure);
         }
     }

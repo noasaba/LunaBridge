@@ -14,6 +14,9 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.Event;
 import org.bukkit.entity.Player;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.server.PluginDisableEvent;
+import org.bukkit.event.server.PluginEnableEvent;
 import org.bukkit.plugin.EventExecutor;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -26,9 +29,8 @@ import org.jetbrains.annotations.NotNull;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.LinkedHashMap;
 
 /** Paper standalone adapter; it never observes legacy chat events or owns Minecraft transport. */
 public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener {
@@ -36,14 +38,15 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
     private Subscription subscription;
     private LunaChatIntegrationApi api;
     private PaperSettings settings;
-    private final Set<UUID> publiclyOnline = ConcurrentHashMap.newKeySet();
+    private final PublicPresenceSnapshot publiclyOnline = new PublicPresenceSnapshot();
     private PublicVisibilityProvider visibilityProvider = new DefaultVisibilityProvider();
+    private Listener vanishListener;
 
     @Override public void onEnable() {
-        var command = getCommand("lunabridge");
-        if (command == null) throw new IllegalStateException("lunabridge command metadata missing");
-        command.setExecutor(this::onAdministrationCommand);
         try {
+            var command = getCommand("lunabridge");
+            if (command == null) throw new IllegalStateException("lunabridge command metadata missing");
+            command.setExecutor(this::onAdministrationCommand);
             settings = PaperSettings.load(this);
             RegisteredServiceProvider<LunaChatIntegrationApi> registration =
                     Bukkit.getServicesManager().getRegistration(LunaChatIntegrationApi.class);
@@ -53,58 +56,124 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                 api.channels().find(new ChannelId(channelId)).orElseThrow(
                         () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
             }
-            visibilityProvider = createVisibilityProvider();
-            publiclyOnline.clear();
-            Bukkit.getOnlinePlayers().forEach(player -> {
-                if (visibilityProvider.isPublic(player)) publiclyOnline.add(player.getUniqueId());
-            });
+            refreshVisibilityProvider();
             PlayerDirectory players = this::publicPlayerNames;
             discord = DiscordConnector.start(api, players, settings.discord, getSLF4JLogger());
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             Bukkit.getPluginManager().registerEvents(this, this);
             discord.notification("startup", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
             getLogger().info("LunaBridge Paper standalone enabled as a Discord-only LunaChat API consumer.");
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | LinkageError failure) {
             closeBridge();
+            closeVanishListener();
+            publiclyOnline.clear();
             getLogger().severe("LunaBridge Paper standalone refused to start before Discord connection: " + failure.getMessage());
         }
     }
 
     @EventHandler public void onJoin(PlayerJoinEvent event) {
-        if (!visibilityProvider.isPublic(event.getPlayer()) || !publiclyOnline.add(event.getPlayer().getUniqueId())) return;
+        if (!isPublic(event.getPlayer()) || !publiclyOnline.markPublic(event.getPlayer().getUniqueId(), event.getPlayer().getName())) return;
         if (discord != null) discord.notification("join", Map.of("player", event.getPlayer().getName(),
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
 
     @EventHandler public void onQuit(PlayerQuitEvent event) {
-        if (!publiclyOnline.remove(event.getPlayer().getUniqueId())) return;
-        if (discord != null) discord.notification("quit", Map.of("player", event.getPlayer().getName(),
+        String playerName = publiclyOnline.markHidden(event.getPlayer().getUniqueId());
+        if (playerName == null) return;
+        if (discord != null) discord.notification("quit", Map.of("player", playerName,
                 "uuid", event.getPlayer().getUniqueId().toString(), "server", Bukkit.getServer().getName()));
     }
 
-    private PublicVisibilityProvider createVisibilityProvider() {
-        if (!Bukkit.getPluginManager().isPluginEnabled("SuperVanish")
-                && !Bukkit.getPluginManager().isPluginEnabled("PremiumVanish")) {
-            return new DefaultVisibilityProvider();
+    @EventHandler public void onVanishPluginEnabled(PluginEnableEvent event) {
+        if (isVanishPlugin(event.getPlugin().getName())) refreshVisibilityProvider();
+    }
+
+    @EventHandler public void onVanishPluginDisabled(PluginDisableEvent event) {
+        if (!isVanishPlugin(event.getPlugin().getName())) return;
+        failClosed("Vanish plugin was disabled", null);
+    }
+
+    private void refreshVisibilityProvider() {
+        closeVanishListener();
+        if (!hasVanishPluginInstalled()) {
+            visibilityProvider = new DefaultVisibilityProvider();
+            rebuildPublicSnapshot();
+            return;
         }
+        if (!hasEnabledVanishPlugin()) {
+            failClosed("Vanish plugin is installed but not enabled", null);
+            return;
+        }
+        Listener listener = null;
         try {
             PublicVisibilityProvider provider = new SuperVanishVisibilityProvider();
-            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerHideEvent", false);
-            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerShowEvent", true);
+            listener = new Listener() { };
+            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerHideEvent", false, listener);
+            registerVanishEvent("de.myzelyam.api.vanish.PostPlayerShowEvent", true, listener);
+            visibilityProvider = provider;
+            vanishListener = listener;
+            rebuildPublicSnapshot();
             getLogger().info("SuperVanish public presence integration enabled.");
-            return provider;
-        } catch (IllegalStateException | LinkageError failure) {
-            getLogger().warning("Vanish plugin detected but its public API is unavailable; public presence filtering is disabled.");
-            return new DefaultVisibilityProvider();
+        } catch (RuntimeException | LinkageError failure) {
+            if (listener != null) HandlerList.unregisterAll(listener);
+            failClosed("Vanish plugin integration failed; Discord public presence is fail-closed", failure);
         }
     }
 
+    private boolean hasVanishPluginInstalled() {
+        return Bukkit.getPluginManager().getPlugin("SuperVanish") != null
+                || Bukkit.getPluginManager().getPlugin("PremiumVanish") != null;
+    }
+
+    private boolean hasEnabledVanishPlugin() {
+        return Bukkit.getPluginManager().isPluginEnabled("SuperVanish")
+                || Bukkit.getPluginManager().isPluginEnabled("PremiumVanish");
+    }
+
+    private static boolean isVanishPlugin(String pluginName) {
+        return "SuperVanish".equals(pluginName) || "PremiumVanish".equals(pluginName);
+    }
+
+    private void rebuildPublicSnapshot() {
+        Map<UUID, String> snapshot = new LinkedHashMap<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (isPublic(player)) snapshot.put(player.getUniqueId(), player.getName());
+            if (visibilityProvider instanceof FailClosedVisibilityProvider) {
+                publiclyOnline.clear();
+                return;
+            }
+        }
+        publiclyOnline.replace(snapshot);
+    }
+
+    private boolean isPublic(Player player) {
+        try {
+            return visibilityProvider.isPublic(player);
+        } catch (RuntimeException | LinkageError failure) {
+            failClosed("Vanish visibility lookup failed; Discord public presence is fail-closed", failure);
+            return false;
+        }
+    }
+
+    private void failClosed(String message, Throwable failure) {
+        closeVanishListener();
+        visibilityProvider = new FailClosedVisibilityProvider();
+        publiclyOnline.clear();
+        if (failure == null) getLogger().severe(message);
+        else getLogger().log(java.util.logging.Level.SEVERE, message, failure);
+    }
+
+    private void closeVanishListener() {
+        if (vanishListener != null) HandlerList.unregisterAll(vanishListener);
+        vanishListener = null;
+    }
+
     @SuppressWarnings("unchecked")
-    private void registerVanishEvent(String className, boolean shown) {
+    private void registerVanishEvent(String className, boolean shown, Listener listener) {
         try {
             Class<? extends Event> eventType = (Class<? extends Event>) Class.forName(className);
-            EventExecutor executor = (listener, event) -> handleVanishEvent(event, shown);
-            Bukkit.getPluginManager().registerEvent(eventType, this, EventPriority.MONITOR, executor, this, true);
+            EventExecutor executor = (ignored, event) -> handleVanishEvent(event, shown);
+            Bukkit.getPluginManager().registerEvent(eventType, listener, EventPriority.MONITOR, executor, this, true);
         } catch (ClassNotFoundException | LinkageError missingEvent) {
             throw new IllegalStateException("Missing SuperVanish event " + className, missingEvent);
         }
@@ -114,22 +183,25 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
         try {
             Player player = (Player) event.getClass().getMethod("getPlayer").invoke(event);
             if (!player.isOnline()) return;
-            if (shown && visibilityProvider.isPublic(player)) publiclyOnline.add(player.getUniqueId());
-            else publiclyOnline.remove(player.getUniqueId());
-        } catch (ReflectiveOperationException | ClassCastException failure) {
-            getLogger().warning("Could not read player from vanish event: " + failure.getMessage());
+            if (shown && isPublic(player)) publiclyOnline.markPublic(player.getUniqueId(), player.getName());
+            else publiclyOnline.markHidden(player.getUniqueId());
+        } catch (ReflectiveOperationException | ClassCastException | LinkageError failure) {
+            failClosed("Could not read vanish event; Discord public presence is fail-closed", failure);
         }
     }
 
     private List<String> publicPlayerNames() {
-        return Bukkit.getOnlinePlayers().stream()
-                .filter(player -> publiclyOnline.contains(player.getUniqueId()))
-                .map(Player::getName).toList();
+        return publiclyOnline.playerNames();
     }
 
     @Override public void onDisable() {
-        if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
+        try {
+            if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
+        } catch (RuntimeException failure) {
+            getLogger().warning("Could not send LunaBridge shutdown notification");
+        }
         closeBridge();
+        closeVanishListener();
         publiclyOnline.clear();
     }
 
@@ -151,8 +223,12 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
             return true;
         }
         if (arguments.length == 1 && "doctor".equalsIgnoreCase(arguments[0])) {
-            BridgeAdministration.doctor(api, settings.discord, discord != null && discord.hasGateway(),
-                    discord != null && discord.isReady()).forEach(sender::sendMessage);
+            try {
+                BridgeAdministration.doctor(api, settings.discord, discord != null && discord.hasGateway(),
+                        discord != null && discord.isReady()).forEach(sender::sendMessage);
+            } catch (RuntimeException failure) {
+                sender.sendMessage("FAIL doctor could not inspect LunaBridge state: " + failure.getMessage());
+            }
             return true;
         }
         if (arguments.length == 3 && "setup".equalsIgnoreCase(arguments[0])) {
