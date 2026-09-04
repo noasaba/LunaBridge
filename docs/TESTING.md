@@ -9,7 +9,7 @@ The deterministic test suite covers:
 - fan-out preservation when multiple Discord channels map to one LunaChat channel;
 - `doctor` classification for every LunaChat network state;
 - Discord mention suppression, Minecraft legacy formatting removal, Unicode preservation, and surrogate-safe 2,000-character handling;
-- token-file precedence, additive migration through schema 4, stable-ID setup persistence, and external-publish setup refusal;
+- token-file precedence, additive migration through schema 5, stable-ID setup persistence, and external-publish setup refusal;
 - terminal external publish result handling and bounded retry infrastructure;
 - Paper plugin metadata and Velocity generated metadata.
 

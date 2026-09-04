@@ -180,6 +180,13 @@ class DiscordContractTest {
         assertEquals("123", request.identity().value());
     }
 
+    @Test void externalDisplayNamePrefixesDiscordAndRemovesLegacyFormattingAndNewlines() {
+        assertEquals("Discord:Noa Berry", DiscordConnector.externalDisplayName("Discord:{username}",
+                "§bNoa\n Berry\r"));
+        assertEquals("[Discord] Noa", DiscordConnector.externalDisplayName("[Discord] {username}", "Noa"));
+        assertEquals("unknown", DiscordConnector.externalDisplayName("§a\n", "§b\r"));
+    }
+
     @Test void externalPublishDiagnosticsCorrelateAdmissionWithoutLoggingContent() {
         var request = new com.github.ucchyocean.lunachat.api.ExternalMessageRequest(
                 new com.github.ucchyocean.lunachat.api.ChannelId("550e8400-e29b-41d4-a716-446655440000"),

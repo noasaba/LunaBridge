@@ -14,7 +14,7 @@ import java.util.Map;
 import java.util.UUID;
 
 final class PaperSettings {
-    private static final int CURRENT_SCHEMA = 4;
+    private static final int CURRENT_SCHEMA = 5;
     final DiscordSettings discord;
 
     private PaperSettings(DiscordSettings discord) { this.discord = discord; }
@@ -27,6 +27,9 @@ final class PaperSettings {
         migrateLegacy(plugin, config);
         if (!config.contains("discord.minecraft-chat-format")) {
             config.set("discord.minecraft-chat-format", DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
+        }
+        if (!config.contains("discord.external-display-name-format")) {
+            config.set("discord.external-display-name-format", DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT);
         }
         config.set("config-version", CURRENT_SCHEMA);
         plugin.saveConfig();
@@ -42,6 +45,8 @@ final class PaperSettings {
         Map<String, String> options = new LinkedHashMap<>();
         options.put("discord.minecraft-chat-format", config.getString("discord.minecraft-chat-format",
                 DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT));
+        options.put("discord.external-display-name-format", config.getString("discord.external-display-name-format",
+                DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT));
         options.put("discord.notifications.channel-id", config.getString("discord.notifications.channel-id", ""));
         options.put("discord.notifications.enable.startup", Boolean.toString(config.getBoolean("discord.notifications.enable.startup", true)));
         options.put("discord.notifications.enable.shutdown", Boolean.toString(config.getBoolean("discord.notifications.enable.shutdown", true)));

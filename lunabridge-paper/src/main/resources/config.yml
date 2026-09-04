@@ -1,11 +1,13 @@
 # LunaBridge-Paper owns the standalone Discord connector, never Minecraft chat or network transport.
-config-version: 4
+config-version: 5
 discord:
   token: "PUT_DISCORD_BOT_TOKEN_HERE"
   # Absolute path, or a path relative to this plugin directory. Takes precedence over token.
   token-file: ""
   # Placeholders: {channel}, {username}, {message}, {japanized}
   minecraft-chat-format: "[{channel}] {username}: {message}{japanized}"
+  # Discord-to-Minecraft author display name. {username} is the effective Discord display name.
+  external-display-name-format: "Discord:{username}"
   notifications:
     channel-id: ""
     enable:

@@ -9,8 +9,8 @@
 | LunaChat Paper / Velocity | `4.0.0-SNAPSHOT` |
 | LunaChat Integration API | `1.0.0-SNAPSHOT`（API major 1） |
 | LunaChat network wire | `2`（`lunachat:network_v2`） |
-| LunaBridge Paper / Velocity | `0.3.0-beta.12` |
-| LunaBridge config schema | `4` |
+| LunaBridge Paper / Velocity | `0.3.0-beta.13` |
+| LunaBridge config schema | `5` |
 | Java | `25` |
 | Paper API | `26.2` |
 | Velocity API | `4.1.x` |
@@ -54,7 +54,7 @@ Paper
 Paperの`plugins`へ次の2本を入れます。
 
 - `LunaChat.jar`
-- `lunabridge-paper-standalone-0.3.0-beta.12.jar`
+- `lunabridge-paper-standalone-0.3.0-beta.13.jar`
 
 この構成ではLunaChatの`integration.sharePass`を空にします。
 
@@ -75,7 +75,7 @@ Paper backend A/B/...
 Velocityの`plugins`へ次の2本を入れます。
 
 - `LunaChat-Velocity.jar`
-- `lunabridge-velocity-0.3.0-beta.12.jar`
+- `lunabridge-velocity-0.3.0-beta.13.jar`
 
 各Paper backendの`plugins`へ次の1本だけを入れます。
 
@@ -157,21 +157,23 @@ Velocityと全Paperへ同じ`sharePass`を設定します。
 Velocityでは`plugins/lunabridge-velocity/config.properties`を使います。
 
 ```properties
-config-version=4
+config-version=5
 discord.token-file=/secure/path/discord-token
 discord.text-commands.enabled=true
 discord.commands.players.mode=both
 discord.commands.players.text-trigger=!p
 discord.minecraft-chat-format=[{channel}] {username}: {message}{japanized}
+discord.external-display-name-format=Discord:{username}
 ```
 
 Paper単体では`plugins/LunaBridge-Paper-Standalone/config.yml`を使います。
 
 ```yaml
-config-version: 4
+config-version: 5
 discord:
   token-file: "/secure/path/discord-token"
   minecraft-chat-format: "[{channel}] {username}: {message}{japanized}"
+  external-display-name-format: "Discord:{username}"
 ```
 
 inlineの`discord.token`も後方互換で利用できますが、`token-file`が優先されます。
@@ -239,6 +241,8 @@ Minecraftのlegacy color/decoration codeはDiscord表示時だけ除去されま
 ### 5.2 DiscordからMinecraft
 
 対応付け済みDiscordチャンネルで通常メッセージを送ると、LunaBridgeがLunaChatの`publishExternal`へ依頼します。LunaChatは外部投稿許可、重複、期限、容量を検証し、Paperで最終処理した内容をMinecraftへ描画します。
+
+外部発言者の表示は`discord.external-display-name-format`で設定します。既定値は`Discord:{username}`で、LunaChatの既存チャンネル書式と組み合わさり`Discord:NAME: message`となります。`{username}`はDiscordのeffective display nameです。Legacy装飾コード、改行、制御文字は除去されます。この設定はDiscordからMinecraftへの発言者表示だけに適用され、MinecraftからDiscordへの`discord.minecraft-chat-format`は変更しません。
 
 Discord message IDが冪等性キーになるため、再試行されても同一メッセージを二重描画しません。外部originは最後まで保持され、Minecraft由来としてDiscordへ折り返されないためループを防止できます。
 
@@ -545,7 +549,7 @@ rollback時は停止した状態でbackupと対応するJARを戻します。将
 | --- | --- | --- |
 | `LunaChat.jar` | Paper | Minecraft chat本体、standalone authorityまたはnetwork edge |
 | `LunaChat-Velocity.jar` | Velocity | network authority、API provider |
-| `lunabridge-paper-standalone-0.3.0-beta.12.jar` | standalone Paperのみ | Discord connector |
-| `lunabridge-velocity-0.3.0-beta.12.jar` | Velocityのみ | network構成のDiscord connector |
+| `lunabridge-paper-standalone-0.3.0-beta.13.jar` | standalone Paperのみ | Discord connector |
+| `lunabridge-velocity-0.3.0-beta.13.jar` | Velocityのみ | network構成のDiscord connector |
 
 迷った場合は、単体PaperならPaper用2本、Velocity networkならVelocity用2本と各Paper用`LunaChat.jar`だけを配置してください。

@@ -27,7 +27,8 @@ class VelocitySettingsTest {
         assertEquals("550e8400-e29b-41d4-a716-446655440000",
                 settings.discord.discordChannelToLunaChatChannelId().get("1307767610976243722"));
         String persisted = Files.readString(directory.resolve("config.properties"));
-        assertTrue(persisted.contains("config-version=4"));
+        assertTrue(persisted.contains("config-version=5"));
+        assertEquals("Discord:{username}", settings.discord.option("discord.external-display-name-format", ""));
         assertTrue(persisted.contains("discord.minecraft-chat-format="));
         assertEquals("[{channel}] {username}: {message}{japanized}",
                 settings.discord.option("discord.minecraft-chat-format", ""));
@@ -39,7 +40,7 @@ class VelocitySettingsTest {
                 "550e8400-e29b-41d4-a716-446655440000");
         String persisted = Files.readString(directory.resolve("config.properties"));
         assertTrue(persisted.contains("discord.token=keep-me"));
-        assertTrue(persisted.contains("config-version=4"));
+        assertTrue(persisted.contains("config-version=5"));
         assertTrue(persisted.contains("discord.channels.1307767610976243722.lunachat-channel-id="
                 + "550e8400-e29b-41d4-a716-446655440000"));
     }

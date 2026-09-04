@@ -202,7 +202,9 @@ public final class DiscordConnector implements AutoCloseable {
             respond(event.getChannel(), playersText());
             return;
         }
-        String displayName = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
+        String effectiveName = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
+        String displayName = externalDisplayName(settings.option("discord.external-display-name-format",
+                DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT), effectiveName);
         try {
             ExternalMessageRequest request = new ExternalMessageRequest(
                     new com.github.ucchyocean.lunachat.api.ChannelId(lunaChannelId),
@@ -242,6 +244,28 @@ public final class DiscordConnector implements AutoCloseable {
     static String externalPublishRequestDiagnostic(ExternalMessageRequest request) {
         return "channelId=" + request.channelId().value()
                 + " identity=" + request.identity().namespace() + ":" + request.identity().value();
+    }
+
+    static String externalDisplayName(String format, String effectiveName) {
+        String safeName = stripExternalDisplayName(effectiveName);
+        if (safeName.isBlank()) safeName = "unknown";
+        String safeFormat = stripExternalDisplayName(format);
+        String displayName = safeFormat.replace("{username}", safeName).trim();
+        return displayName.isBlank() ? safeName : displayName;
+    }
+
+    private static String stripExternalDisplayName(String text) {
+        StringBuilder sanitized = new StringBuilder(text.length());
+        for (int index = 0; index < text.length(); index++) {
+            char character = text.charAt(index);
+            if (character == '\u00a7') {
+                if (index + 1 < text.length()) index++;
+                continue;
+            }
+            if (character == '\r' || character == '\n' || Character.isISOControl(character)) continue;
+            sanitized.append(character);
+        }
+        return sanitized.toString();
     }
 
     static String externalPublishResultDiagnostic(ExternalMessageRequest request, ExternalPublishResult result) {

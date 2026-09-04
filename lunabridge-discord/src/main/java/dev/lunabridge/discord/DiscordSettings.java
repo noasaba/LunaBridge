@@ -11,6 +11,7 @@ public record DiscordSettings(
         Map<String, String> options) {
     public static final String DEFAULT_MINECRAFT_CHAT_FORMAT =
             "[{channel}] {username}: {message}{japanized}";
+    public static final String DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT = "Discord:{username}";
 
     public DiscordSettings {
         token = Objects.requireNonNull(token, "token").trim();
