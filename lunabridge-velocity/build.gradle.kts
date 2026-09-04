@@ -30,6 +30,7 @@ dependencies {
     testImplementation("com.velocitypowered:velocity-api:$velocityApiVersion")
     testCompileOnly(if (lunaChatApiJar == null) "com.github.ucchyocean:lunachat-api:$lunaChatApiVersion" else files(lunaChatApiJar))
     testCompileOnly(if (svsyncApiJar == null) "com.noasaba.svsync:SVSync-API:$svsyncApiVersion" else files(svsyncApiJar))
+    testRuntimeOnly(if (svsyncApiJar == null) "com.noasaba.svsync:SVSync-API:$svsyncApiVersion" else files(svsyncApiJar))
 }
 
 sourceSets.main {

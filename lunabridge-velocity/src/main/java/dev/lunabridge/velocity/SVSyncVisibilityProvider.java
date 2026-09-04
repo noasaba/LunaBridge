@@ -37,12 +37,17 @@ final class SVSyncVisibilityProvider {
 
     boolean isPublic(UUID playerId) {
         try {
-            return !api.hasState(playerId) || !api.isVanished(playerId);
+            return isPublic(api, playerId);
         } catch (RuntimeException failure) {
             if (lookupFailureLogged.compareAndSet(false, true)) {
-                logger.warn("SVSync state lookup failed; treating unavailable state as public.", failure);
+                logger.warn("SVSync state lookup failed; treating unavailable state as non-public.", failure);
             }
-            return true;
+            return false;
         }
+    }
+
+    static boolean isPublic(SVSyncApi api, UUID playerId) {
+        // With SVSync installed, unknown state must not disclose a player during Paper-to-Velocity sync.
+        return api.hasState(playerId) && !api.isVanished(playerId);
     }
 }
