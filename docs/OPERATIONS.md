@@ -38,6 +38,10 @@ line breaks, and control characters have been removed. This affects only the
 LunaChat external author display name, producing `Discord:NAME: message` with
 the default LunaChat channel format.
 
+For Discord-to-Minecraft messages, image attachments are appended as their
+Discord CDN URLs. A post containing only images therefore appears as the URL
+or URLs in Minecraft chat; non-image attachments are not forwarded.
+
 Inline `discord.token` remains backward compatible, but `discord.token-file` takes precedence and avoids copying the credential into generated configuration. Relative token-file paths are resolved from the plugin data directory. Paper standalone uses the equivalent YAML keys under `discord`.
 
 A channel mapping is checked with `api.channels().find(channelId)` at startup; missing IDs, unsupported roles, unavailable providers, incompatible API majors, and missing capabilities fail closed before JDA connects while the administration command remains available for diagnosis where the platform permits it.

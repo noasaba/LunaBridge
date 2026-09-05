@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -185,6 +186,15 @@ class DiscordContractTest {
                 "§bNoa\n Berry\r"));
         assertEquals("[Discord] Noa", DiscordConnector.externalDisplayName("[Discord] {username}", "Noa"));
         assertEquals("unknown", DiscordConnector.externalDisplayName("§a\n", "§b\r"));
+    }
+
+    @Test void externalContentAppendsOnlyImageAttachmentUrls() {
+        assertEquals("https://cdn.discordapp.com/attachments/image.png",
+                DiscordConnector.externalContent("", List.of("https://cdn.discordapp.com/attachments/image.png")));
+        assertEquals("look https://cdn.discordapp.com/attachments/image.png https://cdn.discordapp.com/attachments/second.gif",
+                DiscordConnector.externalContent("look", List.of("https://cdn.discordapp.com/attachments/image.png",
+                        "https://cdn.discordapp.com/attachments/second.gif")));
+        assertEquals("text", DiscordConnector.externalContent("text", List.of()));
     }
 
     @Test void externalPublishDiagnosticsCorrelateAdmissionWithoutLoggingContent() {

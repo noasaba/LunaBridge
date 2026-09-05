@@ -196,12 +196,16 @@ public final class DiscordConnector implements AutoCloseable {
         if (closed.get() || event.getAuthor().isBot() || event.isWebhookMessage()) return;
         String lunaChannelId = settings.discordChannelToLunaChatChannelId().get(event.getChannel().getId());
         if (lunaChannelId == null) return;
-        String content = DiscordText.fit(event.getMessage().getContentDisplay());
-        if (settings.option("discord.commands.players.text-trigger", "!p").equals(content.trim())
+        String messageContent = event.getMessage().getContentDisplay();
+        if (settings.option("discord.commands.players.text-trigger", "!p").equals(messageContent.trim())
                 && textPlayersEnabled(settings)) {
             respond(event.getChannel(), playersText());
             return;
         }
+        String content = externalContent(messageContent, event.getMessage().getAttachments().stream()
+                .filter(Message.Attachment::isImage)
+                .map(Message.Attachment::getUrl)
+                .toList());
         String effectiveName = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
         String displayName = externalDisplayName(settings.option("discord.external-display-name-format",
                 DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT), effectiveName);
@@ -252,6 +256,13 @@ public final class DiscordConnector implements AutoCloseable {
         String safeFormat = stripExternalDisplayName(format);
         String displayName = safeFormat.replace("{username}", safeName).trim();
         return displayName.isBlank() ? safeName : displayName;
+    }
+
+    static String externalContent(String messageContent, List<String> imageUrls) {
+        String urls = imageUrls.stream().filter(url -> !url.isBlank()).distinct()
+                .collect(java.util.stream.Collectors.joining(" "));
+        if (urls.isEmpty()) return DiscordText.fit(messageContent);
+        return DiscordText.fit(messageContent.isBlank() ? urls : messageContent + " " + urls);
     }
 
     private static String stripExternalDisplayName(String text) {
