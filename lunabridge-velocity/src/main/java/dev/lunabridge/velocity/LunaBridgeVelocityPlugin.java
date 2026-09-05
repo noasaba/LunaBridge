@@ -10,6 +10,7 @@ import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
+import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.plugin.Dependency;
 import com.velocitypowered.api.plugin.Plugin;
@@ -38,6 +39,7 @@ import java.util.List;
         authors = {"LunaBridge"}, dependencies = {
         @Dependency(id = "lunachat", optional = false), @Dependency(id = "svsync", optional = true)})
 public final class LunaBridgeVelocityPlugin {
+    static final String ADMIN_PERMISSION = "lunabridge.admin";
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
@@ -187,8 +189,10 @@ public final class LunaBridgeVelocityPlugin {
 
     private final class AdministrationCommand implements SimpleCommand {
         @Override public void execute(Invocation invocation) {
-            if (!(invocation.source() instanceof ConsoleCommandSource)) {
-                invocation.source().sendPlainMessage("LunaBridge administration is console-only.");
+            CommandSource source = invocation.source();
+            boolean console = source instanceof ConsoleCommandSource;
+            if (!isAdministrationAuthorized(console, !console && source.hasPermission(ADMIN_PERMISSION))) {
+                source.sendPlainMessage("You do not have permission to administer LunaBridge.");
                 return;
             }
             String[] arguments = invocation.arguments();
@@ -223,5 +227,9 @@ public final class LunaBridgeVelocityPlugin {
             if (invocation.arguments().length <= 1) return List.of("doctor", "setup");
             return List.of();
         }
+    }
+
+    static boolean isAdministrationAuthorized(boolean console, boolean permissionGranted) {
+        return console || permissionGranted;
     }
 }

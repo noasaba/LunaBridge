@@ -52,6 +52,12 @@ class VelocitySettingsTest {
         assertTrue(SVSyncVisibilityProvider.isPublic(state(true, false), playerId));
     }
 
+    @Test void administrationAllowsConsoleAndAuthorizedPlayersOnly() {
+        assertTrue(LunaBridgeVelocityPlugin.isAdministrationAuthorized(true, false));
+        assertTrue(LunaBridgeVelocityPlugin.isAdministrationAuthorized(false, true));
+        assertTrue(!LunaBridgeVelocityPlugin.isAdministrationAuthorized(false, false));
+    }
+
     private static SVSyncApi state(boolean hasState, boolean vanished) {
         return new SVSyncApi() {
             @Override public boolean hasState(UUID playerId) { return hasState; }

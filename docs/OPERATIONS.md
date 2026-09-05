@@ -11,7 +11,15 @@ discord.minecraft-chat-format=[{channel}] {username}: {message}{japanized}
 discord.external-display-name-format=Discord:{username}
 ```
 
-Then run `lunabridge setup 123456789012345678 global` from the server console. The command resolves the name or alias once, requires external publishing, saves the stable UUID mapping, and applies it live. It reports the Discord test as queued only after confirming that JDA is ready, the channel is known, the bot can talk there, and the outbound queue accepted the operation. Run `lunabridge doctor` to inspect API role/version, LunaChat network status, token presence, Discord readiness, and every mapping. Network `READY` is `OK`, `RELOADING` is `WAIT`, and all degraded or stopping states are `FAIL`. Administration is console-only.
+Then run `lunabridge setup 123456789012345678 global` from the Velocity console or from a player with `lunabridge.admin`. The command resolves the name or alias once, requires external publishing, saves the stable UUID mapping, and applies it live. It reports the Discord test as queued only after confirming that JDA is ready, the channel is known, the bot can talk there, and the outbound queue accepted the operation. Run `lunabridge doctor` to inspect API role/version, LunaChat network status, token presence, Discord readiness, and every mapping. Network `READY` is `OK`, `RELOADING` is `WAIT`, and all degraded or stopping states are `FAIL`. Both commands require `lunabridge.admin` for players; the console is always authorized. `doctor` reports only whether a token is configured, never its value.
+
+When Velocity runs under systemd, its standard input is normally unavailable after startup. Grant the permission through LuckPerms (or an equivalent Velocity permission provider), then run the commands in game:
+
+```text
+/lp user <player> permission set lunabridge.admin true
+/lunabridge doctor
+/lunabridge setup <discord-channel-id> <lunachat-channel-name-or-alias>
+```
 
 Multiple Discord channel IDs may map to the same stable LunaChat `ChannelId`; Minecraft messages fan out to every configured Discord destination.
 

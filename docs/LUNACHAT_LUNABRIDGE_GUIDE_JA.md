@@ -9,7 +9,7 @@
 | LunaChat Paper / Velocity | `4.0.0-SNAPSHOT` |
 | LunaChat Integration API | `1.0.0-SNAPSHOT`（API major 1） |
 | LunaChat network wire | `2`（`lunachat:network_v2`） |
-| LunaBridge Paper / Velocity | `0.3.0-beta.13` |
+| LunaBridge Paper / Velocity | `0.3.0-beta.14` |
 | LunaBridge config schema | `5` |
 | Java | `25` |
 | Paper API | `26.2` |
@@ -54,7 +54,7 @@ Paper
 Paperの`plugins`へ次の2本を入れます。
 
 - `LunaChat.jar`
-- `lunabridge-paper-standalone-0.3.0-beta.13.jar`
+- `lunabridge-paper-standalone-0.3.0-beta.14.jar`
 
 この構成ではLunaChatの`integration.sharePass`を空にします。
 
@@ -75,7 +75,7 @@ Paper backend A/B/...
 Velocityの`plugins`へ次の2本を入れます。
 
 - `LunaChat-Velocity.jar`
-- `lunabridge-velocity-0.3.0-beta.13.jar`
+- `lunabridge-velocity-0.3.0-beta.14.jar`
 
 各Paper backendの`plugins`へ次の1本だけを入れます。
 
@@ -180,7 +180,7 @@ inlineの`discord.token`も後方互換で利用できますが、`token-file`�
 
 ### 4.6 DiscordチャンネルをLunaChatへ接続
 
-サーバーコンソールまたはVelocityコンソールから実行します。
+Velocityコンソール、または`lunabridge.admin`権限を持つゲーム内プレイヤーから実行します。
 
 ```text
 lunabridge setup <DiscordチャンネルID> <LunaChatチャンネル名またはalias>
@@ -202,7 +202,15 @@ lunabridge setup 1307767610976243722 global
 
 `OK Discord setup test queued`は通常チャットへ`hello`を投稿したという意味ではありません。設定したDiscordチャンネルへ「このチャンネルをLunaChatへ対応付けた」という確認メッセージを送る処理が受理されたという意味です。
 
-管理コマンドはコンソール専用です。
+Velocityでは`setup`と`doctor`の両方に`lunabridge.admin`が必要です（コンソールは常に許可されます）。権限のないプレイヤーは実行できません。`doctor`はtokenの値を表示せず、設定済みかどうかだけを報告します。
+
+systemdでVelocityを起動していて後から標準入力コンソールを利用できない場合は、LuckPermsなどで管理者へ権限を付与し、ゲーム内から実行します。
+
+```text
+/lp user <Minecraftプレイヤー名> permission set lunabridge.admin true
+/lunabridge doctor
+/lunabridge setup <DiscordチャンネルID> <LunaChatチャンネル名またはalias>
+```
 
 ## 5. 日常的な使い方
 
@@ -297,6 +305,8 @@ LunaBridgeはstartup、shutdown、join/login、quit、first-login、server-switc
 | --- | --- |
 | `lunabridge setup <Discord channel ID> <LunaChat name/alias>` | channel対応を保存して即時反映 |
 | `lunabridge doctor` | API、network、token、Discord gateway、mappingを診断 |
+
+Velocityではコンソールまたは`lunabridge.admin`権限を持つプレイヤーだけが実行できます。`setup`は設定を変更するため常にこの権限が必要です。`doctor`もDiscord tokenの設定状態やmappingを含む運用診断を出力するため、同じ管理権限が必要です。
 
 `doctor`の判定:
 
@@ -549,7 +559,7 @@ rollback時は停止した状態でbackupと対応するJARを戻します。将
 | --- | --- | --- |
 | `LunaChat.jar` | Paper | Minecraft chat本体、standalone authorityまたはnetwork edge |
 | `LunaChat-Velocity.jar` | Velocity | network authority、API provider |
-| `lunabridge-paper-standalone-0.3.0-beta.13.jar` | standalone Paperのみ | Discord connector |
-| `lunabridge-velocity-0.3.0-beta.13.jar` | Velocityのみ | network構成のDiscord connector |
+| `lunabridge-paper-standalone-0.3.0-beta.14.jar` | standalone Paperのみ | Discord connector |
+| `lunabridge-velocity-0.3.0-beta.14.jar` | Velocityのみ | network構成のDiscord connector |
 
 迷った場合は、単体PaperならPaper用2本、Velocity networkならVelocity用2本と各Paper用`LunaChat.jar`だけを配置してください。

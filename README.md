@@ -59,6 +59,6 @@ lunabridge setup <discord-channel-id> <lunachat-channel-name-or-alias>
 lunabridge doctor
 ```
 
-`setup` resolves the name once through the Frozen API, refuses channels that do not accept external messages, persists only the stable `ChannelId`, and applies the mapping without reconnecting JDA. Its Discord test is reported as queued only when the gateway is ready, the channel exists in JDA's cache, the bot can talk there, and the bounded outbound queue accepts it. Both administration commands are console-only.
+`setup` resolves the name once through the Frozen API, refuses channels that do not accept external messages, persists only the stable `ChannelId`, and applies the mapping without reconnecting JDA. Its Discord test is reported as queued only when the gateway is ready, the channel exists in JDA's cache, the bot can talk there, and the bounded outbound queue accepts it. On Velocity, `setup` and `doctor` are available to the console and players with `lunabridge.admin`.
 
-The product version is `0.3.0-beta.13`, generated from `gradle.properties`.
+The product version is `0.3.0-beta.14`, generated from `gradle.properties`.
