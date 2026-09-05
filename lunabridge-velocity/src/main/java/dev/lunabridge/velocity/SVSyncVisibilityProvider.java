@@ -42,7 +42,9 @@ final class SVSyncVisibilityProvider {
     Visibility visibility(UUID playerId) {
         if (api == null) return Visibility.UNKNOWN;
         try {
-            if (!api.hasState(playerId)) return Visibility.UNKNOWN;
+            // SVSync explicitly defines an unknown player as not vanished. Keep the
+            // optional integration from suppressing normal presence notifications.
+            if (!api.hasState(playerId)) return Visibility.PUBLIC;
             return api.isVanished(playerId) ? Visibility.HIDDEN : Visibility.PUBLIC;
         } catch (RuntimeException failure) {
             if (lookupFailureLogged.compareAndSet(false, true)) {
@@ -53,8 +55,7 @@ final class SVSyncVisibilityProvider {
     }
 
     static boolean isPublic(SVSyncApi api, UUID playerId) {
-        // With SVSync installed, unknown state must not disclose a player during Paper-to-Velocity sync.
-        return api.hasState(playerId) && !api.isVanished(playerId);
+        return !api.hasState(playerId) || !api.isVanished(playerId);
     }
 
     enum Visibility { PUBLIC, HIDDEN, UNKNOWN }

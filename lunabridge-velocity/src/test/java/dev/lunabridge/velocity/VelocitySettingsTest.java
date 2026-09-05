@@ -64,7 +64,7 @@ class VelocitySettingsTest {
 
     @Test void svsyncMakesUnknownAndVanishedPlayersNonPublic() {
         UUID playerId = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
-        assertTrue(!SVSyncVisibilityProvider.isPublic(state(false, false), playerId));
+        assertTrue(SVSyncVisibilityProvider.isPublic(state(false, false), playerId));
         assertTrue(!SVSyncVisibilityProvider.isPublic(state(true, true), playerId));
         assertTrue(SVSyncVisibilityProvider.isPublic(state(true, false), playerId));
     }
