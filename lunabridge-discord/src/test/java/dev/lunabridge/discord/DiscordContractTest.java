@@ -58,6 +58,8 @@ class DiscordContractTest {
         assertFalse(cache.markIfNew(third));
         assertTrue(cache.markIfNew(first));
         assertEquals(2, cache.size());
+        cache.forget(first);
+        assertTrue(cache.markIfNew(first));
     }
 
     @Test void reverseMappingsPreserveEveryDiscordDestination() {
@@ -106,6 +108,14 @@ class DiscordContractTest {
     @Test void playersTextUsesOnlyTheRequiredEmptyState() {
         assertEquals("現在ログイン中のプレイヤーはいません",
                 DiscordConnector.playersText(() -> java.util.List.of()));
+    }
+
+    @Test void playersTextKeepsCodeFenceClosedWhenTheListIsLong() {
+        String text = DiscordConnector.playersText(() -> java.util.stream.IntStream.range(0, 500)
+                .mapToObj(index -> "player" + index).toList());
+        assertTrue(text.length() <= DiscordText.MAX_LENGTH);
+        assertTrue(text.startsWith("ログイン中のプレイヤー\n```\n"));
+        assertTrue(text.endsWith("\n```"));
     }
 
     @Test void discordTextDoesNotSplitSurrogatePairOrAllowMentions() {
@@ -186,6 +196,7 @@ class DiscordContractTest {
                 "§bNoa\n Berry\r"));
         assertEquals("[Discord] Noa", DiscordConnector.externalDisplayName("[Discord] {username}", "Noa"));
         assertEquals("unknown", DiscordConnector.externalDisplayName("§a\n", "§b\r"));
+        assertEquals(256, DiscordConnector.externalDisplayName("x".repeat(300), "Noa").length());
     }
 
     @Test void externalContentAppendsOnlyImageAttachmentUrls() {
@@ -237,6 +248,43 @@ class DiscordContractTest {
                 () -> BridgeAdministration.resolveSetup(api, "1307767610976243722", "staff"));
         assertThrows(IllegalArgumentException.class,
                 () -> BridgeAdministration.resolveSetup(api, "not-a-snowflake", "global"));
+    }
+
+    @Test void unroutableMappingsAreExcludedWithoutDisablingValidMappings() {
+        var enabled = new com.github.ucchyocean.lunachat.api.ChannelDescriptor(
+                new com.github.ucchyocean.lunachat.api.ChannelId("550e8400-e29b-41d4-a716-446655440000"),
+                "global", Set.of(), true);
+        var disabled = new com.github.ucchyocean.lunachat.api.ChannelDescriptor(
+                new com.github.ucchyocean.lunachat.api.ChannelId("650e8400-e29b-41d4-a716-446655440000"),
+                "staff", Set.of(), false);
+        DiscordSettings configured = new DiscordSettings("token", Map.of(
+                "10000", enabled.id().value(), "20000", disabled.id().value(),
+                "30000", "750e8400-e29b-41d4-a716-446655440000"), Map.of());
+
+        DiscordSettings active = BridgeAdministration.routableSettings(apiWithChannels(enabled, disabled), configured);
+        assertEquals(Map.of("10000", enabled.id().value()), active.discordChannelToLunaChatChannelId());
+    }
+
+    @Test void threadUsesParentMappingUnlessItHasItsOwnMapping() {
+        DiscordSettings settings = new DiscordSettings("token", Map.of("10000", "parent", "20000", "thread"), Map.of());
+        assertEquals("parent", DiscordConnector.mappedLunaChannelId(settings, "30000", "10000"));
+        assertEquals("thread", DiscordConnector.mappedLunaChannelId(settings, "20000", "10000"));
+        assertNull(DiscordConnector.mappedLunaChannelId(settings, "30000", null));
+    }
+
+    @Test void doctorReportsInvalidUserFacingOptionsWithoutExposingToken() {
+        DiscordSettings settings = new DiscordSettings("secret-token", Map.of(), Map.of(
+                "discord.commands.players.mode", "typo",
+                "discord.text-commands.enabled", "yes",
+                "discord.notifications.enable.join", "true",
+                "discord.notifications.join", "joined",
+                "discord.notifications.channel-id", "bad"));
+        List<String> lines = BridgeAdministration.doctor(apiWithNetworkState(
+                com.github.ucchyocean.lunachat.api.NetworkState.READY), settings, true, true);
+        assertTrue(lines.stream().anyMatch(line -> line.contains("players.mode")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("text-commands.enabled")));
+        assertTrue(lines.stream().anyMatch(line -> line.contains("notifications.channel-id")));
+        assertTrue(lines.stream().noneMatch(line -> line.contains("secret-token")));
     }
 
     @Test void nonRetryablePublishResultIsTerminal() {

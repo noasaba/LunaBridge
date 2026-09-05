@@ -52,10 +52,6 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                     Bukkit.getServicesManager().getRegistration(LunaChatIntegrationApi.class);
             api = registration == null ? null : registration.getProvider();
             AuthorityValidation.require(api, RuntimeRole.STANDALONE_AUTHORITY);
-            for (String channelId : settings.discord.discordChannelToLunaChatChannelId().values()) {
-                api.channels().find(new ChannelId(channelId)).orElseThrow(
-                        () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
-            }
             refreshVisibilityProvider();
             String serverName = Bukkit.getServer().getName();
             PlayerDirectory players = new PlayerDirectory() {
@@ -65,7 +61,8 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                     return names.isEmpty() ? List.of() : List.of(new PlayerGroup(serverName, names));
                 }
             };
-            discord = DiscordConnector.start(api, players, settings.discord, getSLF4JLogger());
+            discord = DiscordConnector.start(api, players,
+                    BridgeAdministration.routableSettings(api, settings.discord), getSLF4JLogger());
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             Bukkit.getPluginManager().registerEvents(this, this);
             discord.notification("startup", Map.of("online", Integer.toString(publiclyOnline.size()), "max", "?"));
@@ -248,7 +245,7 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
                         + channel.name() + " (" + channel.id().value() + ")");
                 if (discord == null) sender.sendMessage("WAIT mapping saved; restart the server to recover the bridge");
                 else {
-                    discord.reconfigure(updated.discord);
+                    discord.reconfigure(BridgeAdministration.routableSettings(api, updated.discord));
                     sender.sendMessage(discord.sendSetupTest(arguments[1], channel.name())
                             ? "OK Discord setup test queued" : "FAIL Discord gateway unavailable; mapping was saved");
                 }
@@ -257,7 +254,19 @@ public final class LunaBridgePaperPlugin extends JavaPlugin implements Listener 
             }
             return true;
         }
-        sender.sendMessage("Usage: lunabridge doctor | lunabridge setup <discord-channel-id> <lunachat-name-or-alias>");
+        if (arguments.length == 2 && "unmap".equalsIgnoreCase(arguments[0])) {
+            try {
+                PaperSettings.removeMapping(this, arguments[1]);
+                PaperSettings updated = PaperSettings.load(this);
+                settings = updated;
+                if (discord != null) discord.reconfigure(BridgeAdministration.routableSettings(api, updated.discord));
+                sender.sendMessage("OK removed Discord channel mapping " + arguments[1]);
+            } catch (RuntimeException failure) {
+                sender.sendMessage("FAIL " + failure.getMessage());
+            }
+            return true;
+        }
+        sender.sendMessage("Usage: lunabridge doctor | lunabridge setup <discord-channel-id> <lunachat-name-or-alias> | lunabridge unmap <discord-channel-id>");
         return true;
     }
 }

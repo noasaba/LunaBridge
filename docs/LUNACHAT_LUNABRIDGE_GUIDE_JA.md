@@ -9,7 +9,7 @@
 | LunaChat Paper / Velocity | `4.0.0-SNAPSHOT` |
 | LunaChat Integration API | `1.0.0-SNAPSHOT`（API major 1） |
 | LunaChat network wire | `2`（`lunachat:network_v2`） |
-| LunaBridge Paper / Velocity | `0.3.0-beta.15` |
+| LunaBridge Paper / Velocity | `0.3.0-beta.16` |
 | LunaBridge config schema | `5` |
 | Java | `25` |
 | Paper API | `26.2` |
@@ -54,7 +54,7 @@ Paper
 Paperの`plugins`へ次の2本を入れます。
 
 - `LunaChat.jar`
-- `lunabridge-paper-standalone-0.3.0-beta.15.jar`
+- `lunabridge-paper-standalone-0.3.0-beta.16.jar`
 
 この構成ではLunaChatの`integration.sharePass`を空にします。
 
@@ -75,7 +75,7 @@ Paper backend A/B/...
 Velocityの`plugins`へ次の2本を入れます。
 
 - `LunaChat-Velocity.jar`
-- `lunabridge-velocity-0.3.0-beta.15.jar`
+- `lunabridge-velocity-0.3.0-beta.16.jar`
 
 各Paper backendの`plugins`へ次の1本だけを入れます。
 
@@ -307,6 +307,7 @@ LunaBridgeはstartup、shutdown、join/login、quit、first-login、server-switc
 | --- | --- |
 | `lunabridge setup <Discord channel ID> <LunaChat name/alias>` | channel対応を保存して即時反映 |
 | `lunabridge doctor` | API、network、token、Discord gateway、mappingを診断 |
+| `lunabridge unmap <Discord channel ID>` | 不要または無効なchannel対応を削除 |
 
 Velocityではコンソールまたは`lunabridge.admin`権限を持つプレイヤーだけが実行できます。`setup`は設定を変更するため常にこの権限が必要です。`doctor`もDiscord tokenの設定状態やmappingを含む運用診断を出力するため、同じ管理権限が必要です。
 
@@ -561,7 +562,7 @@ rollback時は停止した状態でbackupと対応するJARを戻します。将
 | --- | --- | --- |
 | `LunaChat.jar` | Paper | Minecraft chat本体、standalone authorityまたはnetwork edge |
 | `LunaChat-Velocity.jar` | Velocity | network authority、API provider |
-| `lunabridge-paper-standalone-0.3.0-beta.15.jar` | standalone Paperのみ | Discord connector |
-| `lunabridge-velocity-0.3.0-beta.15.jar` | Velocityのみ | network構成のDiscord connector |
+| `lunabridge-paper-standalone-0.3.0-beta.16.jar` | standalone Paperのみ | Discord connector |
+| `lunabridge-velocity-0.3.0-beta.16.jar` | Velocityのみ | network構成のDiscord connector |
 
 迷った場合は、単体PaperならPaper用2本、Velocity networkならVelocity用2本と各Paper用`LunaChat.jar`だけを配置してください。

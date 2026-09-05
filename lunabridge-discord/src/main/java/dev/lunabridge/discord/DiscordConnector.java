@@ -9,6 +9,7 @@ import com.github.ucchyocean.lunachat.api.OriginKind;
 import net.dv8tion.jda.api.JDA;
 import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
@@ -137,7 +138,9 @@ public final class DiscordConnector implements AutoCloseable {
         String template = settings.option("discord.minecraft-chat-format",
                 DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
         String text = DiscordText.suppressMentions(minecraftRelayText(message, template));
-        channelIds.forEach(channelId -> send(text, channelId, false));
+        boolean accepted = false;
+        for (String channelId : channelIds) accepted |= send(text, channelId, false);
+        if (!accepted) receipts.forget(message.messageId());
     }
 
     static String minecraftRelayText(AcceptedMessage message, String template) {
@@ -194,7 +197,7 @@ public final class DiscordConnector implements AutoCloseable {
 
     private void handleMessage(MessageReceivedEvent event) {
         if (closed.get() || event.getAuthor().isBot() || event.isWebhookMessage()) return;
-        String lunaChannelId = settings.discordChannelToLunaChatChannelId().get(event.getChannel().getId());
+        String lunaChannelId = mappedLunaChannelId(event);
         if (lunaChannelId == null) return;
         String messageContent = event.getMessage().getContentDisplay();
         if (settings.option("discord.commands.players.text-trigger", "!p").equals(messageContent.trim())
@@ -202,10 +205,7 @@ public final class DiscordConnector implements AutoCloseable {
             respond(event.getChannel(), playersText());
             return;
         }
-        String content = externalContent(messageContent, event.getMessage().getAttachments().stream()
-                .filter(Message.Attachment::isImage)
-                .map(Message.Attachment::getUrl)
-                .toList());
+        String content = externalContent(messageContent, externalMediaUrls(event.getMessage()));
         String effectiveName = event.getMember() == null ? event.getAuthor().getName() : event.getMember().getEffectiveName();
         String displayName = externalDisplayName(settings.option("discord.external-display-name-format",
                 DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT), effectiveName);
@@ -255,7 +255,7 @@ public final class DiscordConnector implements AutoCloseable {
         if (safeName.isBlank()) safeName = "unknown";
         String safeFormat = stripExternalDisplayName(format);
         String displayName = safeFormat.replace("{username}", safeName).trim();
-        return displayName.isBlank() ? safeName : displayName;
+        return DiscordText.fit(displayName.isBlank() ? safeName : displayName, 256);
     }
 
     static String externalContent(String messageContent, List<String> imageUrls) {
@@ -263,6 +263,30 @@ public final class DiscordConnector implements AutoCloseable {
                 .collect(java.util.stream.Collectors.joining(" "));
         if (urls.isEmpty()) return DiscordText.fit(messageContent);
         return DiscordText.fit(messageContent.isBlank() ? urls : messageContent + " " + urls);
+    }
+
+    private static List<String> externalMediaUrls(Message message) {
+        List<String> urls = new ArrayList<>();
+        message.getAttachments().stream().filter(Message.Attachment::isImage)
+                .map(Message.Attachment::getUrl).forEach(urls::add);
+        message.getStickers().stream().map(sticker -> sticker.getIconUrl()).forEach(urls::add);
+        for (MessageEmbed embed : message.getEmbeds()) {
+            if (embed.getImage() != null) urls.add(embed.getImage().getUrl());
+            else if (embed.getThumbnail() != null) urls.add(embed.getThumbnail().getUrl());
+        }
+        return List.copyOf(urls);
+    }
+
+    private String mappedLunaChannelId(MessageReceivedEvent event) {
+        String parentId = event.getChannelType().isThread()
+                ? event.getChannel().asThreadChannel().getParentMessageChannel().getId() : null;
+        return mappedLunaChannelId(settings, event.getChannel().getId(), parentId);
+    }
+
+    static String mappedLunaChannelId(DiscordSettings settings, String channelId, String parentChannelId) {
+        String direct = settings.discordChannelToLunaChatChannelId().get(channelId);
+        return direct != null ? direct : parentChannelId == null ? null
+                : settings.discordChannelToLunaChatChannelId().get(parentChannelId);
     }
 
     private static String stripExternalDisplayName(String text) {
@@ -294,7 +318,9 @@ public final class DiscordConnector implements AutoCloseable {
             respondSlash(event, "The LunaBridge /players command is disabled.");
             return;
         }
-        if (!isAllowedCommandChannel(settings, event.getChannel().getId())) {
+        String parentId = event.getChannelType().isThread()
+                ? event.getChannel().asThreadChannel().getParentMessageChannel().getId() : null;
+        if (mappedLunaChannelId(settings, event.getChannel().getId(), parentId) == null) {
             respondSlash(event, "LunaBridge commands are not enabled in this channel.");
             return;
         }
@@ -401,7 +427,9 @@ public final class DiscordConnector implements AutoCloseable {
                 .map(group -> group.serverName() + " (" + group.playerNames().size() + "): "
                         + String.join(" ", group.playerNames().stream().sorted().toList()))
                 .collect(java.util.stream.Collectors.joining("\n"));
-        return "ログイン中のプレイヤー\n```\n" + body + "\n```";
+        String prefix = "ログイン中のプレイヤー\n```\n";
+        String suffix = "\n```";
+        return prefix + DiscordText.fit(body, DiscordText.MAX_LENGTH - prefix.length() - suffix.length()) + suffix;
     }
 
     public static boolean textPlayersEnabled(DiscordSettings settings) {

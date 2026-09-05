@@ -45,6 +45,7 @@ public final class LunaBridgeVelocityPlugin {
     private final Path dataDirectory;
     private final Set<UUID> connected = ConcurrentHashMap.newKeySet();
     private final Map<UUID, PlayerLocation> playerLocations = new ConcurrentHashMap<>();
+    private final Map<UUID, Boolean> lastKnownPublic = new ConcurrentHashMap<>();
     private DiscordConnector discord;
     private Subscription subscription;
     private SeenPlayerStore seenPlayers;
@@ -75,17 +76,14 @@ public final class LunaBridgeVelocityPlugin {
             if (svsync != null) logger.info("SVSync public presence filtering enabled.");
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("lunabridge")
                     .plugin(this).build(), new AdministrationCommand());
-            for (String channelId : settings.discord.discordChannelToLunaChatChannelId().values()) {
-                api.channels().find(new com.github.ucchyocean.lunachat.api.ChannelId(channelId)).orElseThrow(
-                        () -> new IllegalStateException("Unknown LunaChat ChannelId " + channelId));
-            }
             seenPlayers = new SeenPlayerStore(dataDirectory);
             captureConnectedPlayers();
             PlayerDirectory players = new PlayerDirectory() {
                 @Override public List<String> onlinePlayerNames() { return publicPlayerNames(); }
                 @Override public List<PlayerGroup> onlinePlayersByServer() { return publicPlayersByServer(); }
             };
-            discord = DiscordConnector.start(api, players, settings.discord, logger);
+            discord = DiscordConnector.start(api, players,
+                    BridgeAdministration.routableSettings(api, settings.discord), logger);
             subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
             discord.notification("startup", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
             logger.info("LunaBridge enabled as a Discord-only LunaChat API consumer.");
@@ -101,8 +99,9 @@ public final class LunaBridgeVelocityPlugin {
         playerLocations.put(event.getPlayer().getUniqueId(), new PlayerLocation(event.getPlayer().getUsername(), to));
         Map<String, String> values = values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", to);
         if (event.getPreviousServer().isEmpty()) {
+            lastKnownPublic.remove(event.getPlayer().getUniqueId());
             connected.add(event.getPlayer().getUniqueId());
-            notifyJoinAfterSVSyncState(event.getPlayer().getUniqueId(), values);
+            notifyJoinAfterSVSyncState(event.getPlayer().getUniqueId(), values, 0);
         } else {
             String from = event.getPreviousServer().orElseThrow().getServerInfo().getName();
             if (!from.equals(to) && isPublic(event.getPlayer().getUniqueId())) {
@@ -112,8 +111,10 @@ public final class LunaBridgeVelocityPlugin {
     }
 
     @Subscribe public void disconnected(DisconnectEvent event) {
+        boolean publiclyVisible = isPublicAtDisconnect(event.getPlayer().getUniqueId());
         playerLocations.remove(event.getPlayer().getUniqueId());
-        if (discord != null && connected.remove(event.getPlayer().getUniqueId()) && isPublic(event.getPlayer().getUniqueId())) {
+        lastKnownPublic.remove(event.getPlayer().getUniqueId());
+        if (discord != null && connected.remove(event.getPlayer().getUniqueId()) && publiclyVisible) {
             discord.notification("quit", values(event.getPlayer().getUsername(), event.getPlayer().getUniqueId(), "", ""));
         }
     }
@@ -132,6 +133,7 @@ public final class LunaBridgeVelocityPlugin {
         svsync = null;
         connected.clear();
         playerLocations.clear();
+        lastKnownPublic.clear();
     }
 
     private void closeBridge() {
@@ -145,9 +147,14 @@ public final class LunaBridgeVelocityPlugin {
         return Map.of("player", player, "uuid", uuid.toString(), "from", from, "server", server);
     }
 
-    private void notifyJoinAfterSVSyncState(UUID playerId, Map<String, String> values) {
+    private void notifyJoinAfterSVSyncState(UUID playerId, Map<String, String> values, int attempt) {
         proxy.getScheduler().buildTask(this, () -> {
-            if (discord == null || !connected.contains(playerId) || !isPublic(playerId)) return;
+            if (discord == null || !connected.contains(playerId)) return;
+            if (svsync != null && svsync.visibility(playerId) == SVSyncVisibilityProvider.Visibility.UNKNOWN) {
+                if (attempt < 4) notifyJoinAfterSVSyncState(playerId, values, attempt + 1);
+                return;
+            }
+            if (!isPublic(playerId)) return;
             try {
                 discord.notification(seenPlayers != null && seenPlayers.markFirst(playerId) ? "first-login" : "login", values);
             } catch (IOException failure) {
@@ -157,7 +164,24 @@ public final class LunaBridgeVelocityPlugin {
     }
 
     private boolean isPublic(UUID playerId) {
-        return svsync == null || svsync.isPublic(playerId);
+        if (svsync == null) return true;
+        SVSyncVisibilityProvider.Visibility visibility = svsync.visibility(playerId);
+        if (visibility == SVSyncVisibilityProvider.Visibility.UNKNOWN) return false;
+        boolean publiclyVisible = visibility == SVSyncVisibilityProvider.Visibility.PUBLIC;
+        lastKnownPublic.put(playerId, publiclyVisible);
+        return publiclyVisible;
+    }
+
+    private boolean isPublicAtDisconnect(UUID playerId) {
+        if (svsync == null) return true;
+        SVSyncVisibilityProvider.Visibility visibility = svsync.visibility(playerId);
+        return isPublicAtDisconnect(visibility, lastKnownPublic.get(playerId));
+    }
+
+    static boolean isPublicAtDisconnect(SVSyncVisibilityProvider.Visibility visibility, Boolean lastKnown) {
+        if (visibility == SVSyncVisibilityProvider.Visibility.PUBLIC) return true;
+        if (visibility == SVSyncVisibilityProvider.Visibility.HIDDEN) return false;
+        return Boolean.TRUE.equals(lastKnown);
     }
 
     private List<String> publicPlayerNames() {
@@ -211,7 +235,7 @@ public final class LunaBridgeVelocityPlugin {
                             + channel.name() + " (" + channel.id().value() + ")");
                     if (discord == null) invocation.source().sendPlainMessage("WAIT mapping saved; restart the proxy to recover the bridge");
                     else {
-                        discord.reconfigure(updated.discord);
+                        discord.reconfigure(BridgeAdministration.routableSettings(api, updated.discord));
                         invocation.source().sendPlainMessage(discord.sendSetupTest(arguments[1], channel.name())
                                 ? "OK Discord setup test queued" : "FAIL Discord gateway unavailable; mapping was saved");
                     }
@@ -220,11 +244,25 @@ public final class LunaBridgeVelocityPlugin {
                 }
                 return;
             }
-            invocation.source().sendPlainMessage("Usage: lunabridge doctor | lunabridge setup <discord-channel-id> <lunachat-name-or-alias>");
+            if (arguments.length == 2 && "unmap".equalsIgnoreCase(arguments[0])) {
+                try {
+                    VelocitySettings.removeMapping(dataDirectory, arguments[1]);
+                    VelocitySettings updated = VelocitySettings.load(dataDirectory);
+                    settings = updated;
+                    if (discord != null) discord.reconfigure(BridgeAdministration.routableSettings(api, updated.discord));
+                    source.sendPlainMessage("OK removed Discord channel mapping " + arguments[1]);
+                } catch (IOException | RuntimeException failure) {
+                    source.sendPlainMessage("FAIL " + failure.getMessage());
+                }
+                return;
+            }
+            invocation.source().sendPlainMessage("Usage: lunabridge doctor | lunabridge setup <discord-channel-id> <lunachat-name-or-alias> | lunabridge unmap <discord-channel-id>");
         }
 
         @Override public List<String> suggest(Invocation invocation) {
-            if (invocation.arguments().length <= 1) return List.of("doctor", "setup");
+            CommandSource source = invocation.source();
+            if (!(source instanceof ConsoleCommandSource) && !source.hasPermission(ADMIN_PERMISSION)) return List.of();
+            if (invocation.arguments().length <= 1) return List.of("doctor", "setup", "unmap");
             return List.of();
         }
     }

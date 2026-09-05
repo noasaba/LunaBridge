@@ -45,6 +45,23 @@ class VelocitySettingsTest {
                 + "550e8400-e29b-41d4-a716-446655440000"));
     }
 
+    @Test void mappingUpdatesPreserveCommentsAndCanBeRemoved() throws Exception {
+        Files.writeString(directory.resolve("config.properties"), """
+                # Keep this operator note
+                config-version=5
+                discord.token=keep-me
+                discord.minecraft-chat-format=[{channel}] {username}: {message}{japanized}
+                discord.external-display-name-format=Discord:{username}
+                """);
+        VelocitySettings.saveMapping(directory, "1307767610976243722",
+                "550e8400-e29b-41d4-a716-446655440000");
+        assertTrue(Files.readString(directory.resolve("config.properties")).contains("# Keep this operator note"));
+        VelocitySettings.removeMapping(directory, "1307767610976243722");
+        String persisted = Files.readString(directory.resolve("config.properties"));
+        assertTrue(persisted.contains("# Keep this operator note"));
+        assertTrue(!persisted.contains("discord.channels.1307767610976243722"));
+    }
+
     @Test void svsyncMakesUnknownAndVanishedPlayersNonPublic() {
         UUID playerId = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
         assertTrue(!SVSyncVisibilityProvider.isPublic(state(false, false), playerId));
@@ -56,6 +73,15 @@ class VelocitySettingsTest {
         assertTrue(LunaBridgeVelocityPlugin.isAdministrationAuthorized(true, false));
         assertTrue(LunaBridgeVelocityPlugin.isAdministrationAuthorized(false, true));
         assertTrue(!LunaBridgeVelocityPlugin.isAdministrationAuthorized(false, false));
+    }
+
+    @Test void disconnectUsesLastKnownVisibilityWhenSVSyncAlreadyRemovedState() {
+        assertTrue(LunaBridgeVelocityPlugin.isPublicAtDisconnect(
+                SVSyncVisibilityProvider.Visibility.UNKNOWN, true));
+        assertTrue(!LunaBridgeVelocityPlugin.isPublicAtDisconnect(
+                SVSyncVisibilityProvider.Visibility.UNKNOWN, false));
+        assertTrue(!LunaBridgeVelocityPlugin.isPublicAtDisconnect(
+                SVSyncVisibilityProvider.Visibility.HIDDEN, true));
     }
 
     private static SVSyncApi state(boolean hasState, boolean vanished) {

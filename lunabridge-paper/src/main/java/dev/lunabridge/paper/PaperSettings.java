@@ -73,6 +73,12 @@ final class PaperSettings {
         plugin.saveConfig();
     }
 
+    static void removeMapping(JavaPlugin plugin, String discordChannelId) {
+        if (!discordChannelId.matches("[0-9]{5,32}")) throw new IllegalStateException("invalid Discord channel id");
+        plugin.getConfig().set("bridges." + discordChannelId, null);
+        plugin.saveConfig();
+    }
+
     private static void validateMapping(String discordChannelId, String stableId) {
         if (!discordChannelId.matches("[0-9]{5,32}")) throw new IllegalStateException("invalid Discord channel id");
         try {

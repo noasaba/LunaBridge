@@ -7,8 +7,14 @@ public final class DiscordText {
     private DiscordText() { }
 
     public static String fit(String text) {
-        if (text.length() <= MAX_LENGTH) return text;
-        int end = MAX_LENGTH - 1;
+        return fit(text, MAX_LENGTH);
+    }
+
+    public static String fit(String text, int maximum) {
+        if (maximum < 1) throw new IllegalArgumentException("maximum must be positive");
+        if (text.length() <= maximum) return text;
+        if (maximum == 1) return "…";
+        int end = maximum - 1;
         if (end > 0 && Character.isHighSurrogate(text.charAt(end - 1))) end--;
         return text.substring(0, end) + '…';
     }

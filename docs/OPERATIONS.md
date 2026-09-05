@@ -21,6 +21,10 @@ When Velocity runs under systemd, its standard input is normally unavailable aft
 /lunabridge setup <discord-channel-id> <lunachat-channel-name-or-alias>
 ```
 
+If `doctor` reports an unknown or disabled mapping, remove it with
+`/lunabridge unmap <discord-channel-id>` and configure it again after the
+LunaChat channel is available.
+
 Multiple Discord channel IDs may map to the same stable LunaChat `ChannelId`; Minecraft messages fan out to every configured Discord destination.
 
 Minecraft-to-Discord chat text is controlled by `discord.minecraft-chat-format`

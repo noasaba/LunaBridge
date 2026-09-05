@@ -41,6 +41,10 @@ public final class MessageReceiptCache {
         return receipts.size();
     }
 
+    public synchronized void forget(UUID messageId) {
+        receipts.remove(messageId);
+    }
+
     public synchronized int cleanupExpired() {
         int before = receipts.size();
         cleanup(Instant.now(clock));

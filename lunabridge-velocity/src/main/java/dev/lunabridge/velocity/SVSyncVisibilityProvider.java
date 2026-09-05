@@ -21,28 +21,34 @@ final class SVSyncVisibilityProvider {
 
     static Optional<SVSyncVisibilityProvider> find(ProxyServer proxy, Logger logger) {
         try {
-            Optional<Object> instance = proxy.getPluginManager().getPlugin("svsync")
-                    .flatMap(container -> container.getInstance());
-            if (instance.isEmpty()) return Optional.empty();
+            var container = proxy.getPluginManager().getPlugin("svsync");
+            if (container.isEmpty()) return Optional.empty();
+            Optional<?> instance = container.orElseThrow().getInstance();
+            if (instance.isEmpty()) {
+                logger.warn("SVSync is installed but has no plugin instance; public presence is fail-closed.");
+                return Optional.of(new SVSyncVisibilityProvider(null, logger));
+            }
             if (!(instance.get() instanceof SVSyncApi api)) {
-                logger.warn("SVSync is installed but does not expose the expected SVSyncApi; vanish filtering is disabled.");
-                return Optional.empty();
+                logger.warn("SVSync is installed but does not expose the expected SVSyncApi; public presence is fail-closed.");
+                return Optional.of(new SVSyncVisibilityProvider(null, logger));
             }
             return Optional.of(new SVSyncVisibilityProvider(api, logger));
         } catch (LinkageError failure) {
-            logger.warn("SVSync API is unavailable; vanish filtering is disabled.", failure);
-            return Optional.empty();
+            logger.warn("SVSync API is unavailable; public presence is fail-closed.", failure);
+            return Optional.of(new SVSyncVisibilityProvider(null, logger));
         }
     }
 
-    boolean isPublic(UUID playerId) {
+    Visibility visibility(UUID playerId) {
+        if (api == null) return Visibility.UNKNOWN;
         try {
-            return isPublic(api, playerId);
+            if (!api.hasState(playerId)) return Visibility.UNKNOWN;
+            return api.isVanished(playerId) ? Visibility.HIDDEN : Visibility.PUBLIC;
         } catch (RuntimeException failure) {
             if (lookupFailureLogged.compareAndSet(false, true)) {
                 logger.warn("SVSync state lookup failed; treating unavailable state as non-public.", failure);
             }
-            return false;
+            return Visibility.UNKNOWN;
         }
     }
 
@@ -50,4 +56,6 @@ final class SVSyncVisibilityProvider {
         // With SVSync installed, unknown state must not disclose a player during Paper-to-Velocity sync.
         return api.hasState(playerId) && !api.isVanished(playerId);
     }
+
+    enum Visibility { PUBLIC, HIDDEN, UNKNOWN }
 }
