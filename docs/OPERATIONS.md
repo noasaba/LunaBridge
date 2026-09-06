@@ -25,6 +25,15 @@ If `doctor` reports an unknown or disabled mapping, remove it with
 `/lunabridge unmap <discord-channel-id>` and configure it again after the
 LunaChat channel is available.
 
+On Velocity, LunaBridge starts its Discord gateway only after the Minecraft
+listener has bound successfully. A failed bind therefore cannot leave a
+Discord-only orphan. Listener close, proxy pre-shutdown, and proxy shutdown
+close the LunaChat subscription, retry executor, and JDA gateway; JDA is
+forced down and awaited for up to five seconds. A token-wide cross-host lease
+is intentionally not used because one bot may legitimately serve multiple
+healthy proxies. Do not map the same Discord channel to multiple live proxy
+instances unless duplicate responses are intended.
+
 Multiple Discord channel IDs may map to the same stable LunaChat `ChannelId`; Minecraft messages fan out to every configured Discord destination.
 
 Minecraft-to-Discord chat text is controlled by `discord.minecraft-chat-format`

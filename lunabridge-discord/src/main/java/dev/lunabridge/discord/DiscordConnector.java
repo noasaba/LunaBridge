@@ -32,6 +32,7 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -98,7 +99,7 @@ public final class DiscordConnector implements AutoCloseable {
             logger.info("LunaBridge Discord gateway started as the platform-independent connector.");
             return result;
         } catch (RuntimeException failed) {
-            if (jda != null) try { jda.shutdownNow(); } catch (RuntimeException cleanupFailed) { failed.addSuppressed(cleanupFailed); }
+            if (jda != null) closeJda(jda, logger);
             logger.error("LunaBridge Discord gateway did not start; LunaChat remains available.", failed);
             return disabled(lunaChat, players, settings, logger);
         }
@@ -192,7 +193,22 @@ public final class DiscordConnector implements AutoCloseable {
         if (!closed.compareAndSet(false, true)) return;
         pendingUntilReady().forEach(ignored -> release());
         publishRetries.close();
-        if (jda != null) jda.shutdown();
+        closeJda(jda, logger);
+    }
+
+    static void closeJda(JDA jda, Logger logger) {
+        if (jda == null) return;
+        try {
+            jda.shutdownNow();
+            if (!jda.awaitShutdown(5, TimeUnit.SECONDS)) {
+                logger.warn("LunaBridge Discord gateway did not terminate within 5 seconds");
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            logger.warn("Interrupted while waiting for LunaBridge Discord gateway shutdown");
+        } catch (RuntimeException failure) {
+            logger.warn("Could not fully shut down LunaBridge Discord gateway", failure);
+        }
     }
 
     private void handleMessage(MessageReceivedEvent event) {

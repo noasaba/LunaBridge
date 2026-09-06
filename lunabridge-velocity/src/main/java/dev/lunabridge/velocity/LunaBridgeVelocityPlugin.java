@@ -9,7 +9,11 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.player.ServerConnectedEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
+import com.velocitypowered.api.event.proxy.ProxyPreShutdownEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
+import com.velocitypowered.api.event.proxy.ListenerBoundEvent;
+import com.velocitypowered.api.event.proxy.ListenerCloseEvent;
+import com.velocitypowered.api.network.ListenerType;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.plugin.Dependency;
@@ -52,6 +56,8 @@ public final class LunaBridgeVelocityPlugin {
     private VelocitySettings settings;
     private LunaChatIntegrationApi api;
     private SVSyncVisibilityProvider svsync;
+    private boolean bridgeStarted;
+    private boolean shuttingDown;
 
     private record PlayerLocation(String playerName, String serverName) { }
 
@@ -77,19 +83,54 @@ public final class LunaBridgeVelocityPlugin {
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("lunabridge")
                     .plugin(this).build(), new AdministrationCommand());
             seenPlayers = new SeenPlayerStore(dataDirectory);
+            logger.info("LunaBridge initialized; Discord gateway will start after the Minecraft listener binds.");
+        } catch (IOException | RuntimeException failure) {
+            cleanup();
+            logger.error("LunaBridge did not start; LunaChat remains untouched.", failure);
+        }
+    }
+
+    @Subscribe public void listenerBound(ListenerBoundEvent event) {
+        if (ownsDiscordLifecycle(event.getListenerType())) startBridge();
+    }
+
+    @Subscribe public void listenerClosed(ListenerCloseEvent event) {
+        if (!ownsDiscordLifecycle(event.getListenerType())) return;
+        synchronized (this) {
+            closeBridge();
+            bridgeStarted = false;
+            connected.clear();
+            playerLocations.clear();
+            lastKnownPublic.clear();
+        }
+        logger.info("LunaBridge stopped because the Minecraft listener closed.");
+    }
+
+    private synchronized void startBridge() {
+        if (bridgeStarted || shuttingDown || settings == null || api == null) return;
+        DiscordConnector startedDiscord = null;
+        Subscription startedSubscription = null;
+        try {
             captureConnectedPlayers();
             PlayerDirectory players = new PlayerDirectory() {
                 @Override public List<String> onlinePlayerNames() { return publicPlayerNames(); }
                 @Override public List<PlayerGroup> onlinePlayersByServer() { return publicPlayersByServer(); }
             };
-            discord = DiscordConnector.start(api, players,
+            startedDiscord = DiscordConnector.start(api, players,
                     BridgeAdministration.routableSettings(api, settings.discord), logger);
-            subscription = api.messages().observeAcceptedMessages(discord::relayMinecraft);
-            discord.notification("startup", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
-            logger.info("LunaBridge enabled as a Discord-only LunaChat API consumer.");
-        } catch (IOException | RuntimeException failure) {
-            closeBridge();
-            logger.error("LunaBridge did not start; LunaChat remains untouched.", failure);
+            DiscordConnector relayTarget = startedDiscord;
+            startedSubscription = api.messages().observeAcceptedMessages(relayTarget::relayMinecraft);
+            discord = startedDiscord;
+            subscription = startedSubscription;
+            bridgeStarted = true;
+            startedDiscord.notification("startup", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
+            logger.info("LunaBridge enabled after the Minecraft listener bound successfully.");
+        } catch (RuntimeException failure) {
+            if (startedSubscription != null) try { startedSubscription.close(); }
+            catch (RuntimeException cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+            if (startedDiscord != null) try { startedDiscord.close(); }
+            catch (RuntimeException cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+            logger.error("LunaBridge Discord startup failed after listener bind; all acquired resources were closed.", failure);
         }
     }
 
@@ -119,14 +160,18 @@ public final class LunaBridgeVelocityPlugin {
         }
     }
 
-    @Subscribe public void shutdown(ProxyShutdownEvent event) {
+    @Subscribe public void preShutdown(ProxyPreShutdownEvent event) {
+        shuttingDown = true;
         if (discord != null) discord.finalNotification("shutdown", Map.of("online", Integer.toString(publicPlayerCount()), "max", "?"));
         cleanup();
     }
 
-    private void cleanup() {
+    @Subscribe public void shutdown(ProxyShutdownEvent event) { cleanup(); }
+
+    private synchronized void cleanup() {
         proxy.getCommandManager().unregister("lunabridge");
         closeBridge();
+        bridgeStarted = false;
         seenPlayers = null;
         settings = null;
         api = null;
@@ -269,5 +314,9 @@ public final class LunaBridgeVelocityPlugin {
 
     static boolean isAdministrationAuthorized(boolean console, boolean permissionGranted) {
         return console || permissionGranted;
+    }
+
+    static boolean ownsDiscordLifecycle(ListenerType listenerType) {
+        return listenerType == ListenerType.MINECRAFT;
     }
 }

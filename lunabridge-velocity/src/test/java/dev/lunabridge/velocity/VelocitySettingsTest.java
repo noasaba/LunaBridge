@@ -1,6 +1,7 @@
 package dev.lunabridge.velocity;
 
 import com.noasaba.svsync.api.SVSyncApi;
+import com.velocitypowered.api.network.ListenerType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -82,6 +83,11 @@ class VelocitySettingsTest {
                 SVSyncVisibilityProvider.Visibility.UNKNOWN, false));
         assertTrue(!LunaBridgeVelocityPlugin.isPublicAtDisconnect(
                 SVSyncVisibilityProvider.Visibility.HIDDEN, true));
+    }
+
+    @Test void discordLifecycleIsOwnedOnlyByTheMinecraftListener() {
+        assertTrue(LunaBridgeVelocityPlugin.ownsDiscordLifecycle(ListenerType.MINECRAFT));
+        assertTrue(!LunaBridgeVelocityPlugin.ownsDiscordLifecycle(ListenerType.QUERY));
     }
 
     private static SVSyncApi state(boolean hasState, boolean vanished) {

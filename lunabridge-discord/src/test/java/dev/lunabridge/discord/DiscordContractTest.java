@@ -25,11 +25,31 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.lang.reflect.Proxy;
+import net.dv8tion.jda.api.JDA;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class DiscordContractTest {
     @TempDir Path temporaryDirectory;
+
+    @Test void connectorForcesJdaShutdownAndWaitsForTermination() {
+        AtomicBoolean shutdownNow = new AtomicBoolean();
+        AtomicBoolean awaited = new AtomicBoolean();
+        JDA jda = (JDA) Proxy.newProxyInstance(JDA.class.getClassLoader(), new Class<?>[]{JDA.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("shutdownNow")) { shutdownNow.set(true); return null; }
+                    if (method.getName().equals("awaitShutdown")) { awaited.set(true); return true; }
+                    if (method.getReturnType() == boolean.class) return false;
+                    if (method.getReturnType() == int.class) return 0;
+                    if (method.getReturnType() == long.class) return 0L;
+                    return null;
+                });
+        DiscordConnector.closeJda(jda, org.slf4j.LoggerFactory.getLogger("test"));
+        assertTrue(shutdownNow.get());
+        assertTrue(awaited.get());
+    }
 
     @Test void frozenApiV1RoleAndCapabilitiesAreRequired() {
         LunaChatIntegrationApi api = api(RuntimeRole.STANDALONE_AUTHORITY,
