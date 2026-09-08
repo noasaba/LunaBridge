@@ -200,8 +200,11 @@ public final class LunaBridgeVelocityPlugin {
                 return;
             }
             if (!isPublic(playerId)) return;
+            discord.notification("login", values);
             try {
-                discord.notification(seenPlayers != null && seenPlayers.markFirst(playerId) ? "first-login" : "login", values);
+                if (seenPlayers != null && seenPlayers.markFirst(playerId)) {
+                    discord.notification("first-login", values);
+                }
             } catch (IOException failure) {
                 logger.error("Could not persist first-login state", failure);
             }
@@ -318,5 +321,9 @@ public final class LunaBridgeVelocityPlugin {
 
     static boolean ownsDiscordLifecycle(ListenerType listenerType) {
         return listenerType == ListenerType.MINECRAFT;
+    }
+
+    static List<String> loginNotificationTypes(boolean firstLogin) {
+        return firstLogin ? List.of("login", "first-login") : List.of("login");
     }
 }

@@ -90,10 +90,30 @@ class VelocitySettingsTest {
         assertTrue(!LunaBridgeVelocityPlugin.ownsDiscordLifecycle(ListenerType.QUERY));
     }
 
+    @Test void seenPlayerStoreDistinguishesFirstLoginWithoutReplacingNormalLogin() throws Exception {
+        SeenPlayerStore store = new SeenPlayerStore(directory);
+        UUID playerId = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
+        assertTrue(store.markFirst(playerId));
+        assertTrue(!store.markFirst(playerId));
+        assertEquals(java.util.List.of("login", "first-login"),
+                LunaBridgeVelocityPlugin.loginNotificationTypes(true));
+        assertEquals(java.util.List.of("login"),
+                LunaBridgeVelocityPlugin.loginNotificationTypes(false));
+    }
+
     private static SVSyncApi state(boolean hasState, boolean vanished) {
         return new SVSyncApi() {
             @Override public boolean hasState(UUID playerId) { return hasState; }
             @Override public boolean isVanished(UUID playerId) { return vanished; }
+            @Override public com.noasaba.svsync.api.Visibility getVisibility(UUID playerId) {
+                return !hasState ? com.noasaba.svsync.api.Visibility.UNKNOWN
+                        : vanished ? com.noasaba.svsync.api.Visibility.HIDDEN
+                        : com.noasaba.svsync.api.Visibility.PUBLIC;
+            }
+            @Override public com.noasaba.svsync.api.SVSyncSubscription addVisibilityListener(
+                    com.noasaba.svsync.api.VisibilityListener listener) {
+                return () -> { };
+            }
         };
     }
 }
