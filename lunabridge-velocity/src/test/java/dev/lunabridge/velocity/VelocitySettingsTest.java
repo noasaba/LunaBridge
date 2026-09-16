@@ -1,6 +1,8 @@
 package dev.lunabridge.velocity;
 
 import com.noasaba.svsync.api.SVSyncApi;
+import com.noasaba.svsync.api.Visibility;
+import com.noasaba.svsync.api.VisibilityChange;
 import com.velocitypowered.api.network.ListenerType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -8,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -96,11 +99,36 @@ class VelocitySettingsTest {
         assertTrue(!persisted.contains("discord.channels.1307767610976243722"));
     }
 
-    @Test void svsyncMakesUnknownAndVanishedPlayersNonPublic() {
+    @Test void svsyncMakesOnlyVanishedPlayersNonPublic() {
         UUID playerId = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
         assertTrue(SVSyncVisibilityProvider.isPublic(state(false, false), playerId));
         assertTrue(!SVSyncVisibilityProvider.isPublic(state(true, true), playerId));
         assertTrue(SVSyncVisibilityProvider.isPublic(state(true, false), playerId));
+    }
+
+    @Test void svsyncExplicitReappearIsTheOnlyVisibilityChangeThatAnnouncesLogin() {
+        UUID playerId = UUID.fromString("550e8400-e29b-41d4-a716-446655440000");
+        assertTrue(LunaBridgeVelocityPlugin.shouldNotifyReappear(new VisibilityChange(
+                playerId, Visibility.HIDDEN, Visibility.PUBLIC, true, "main", 1)));
+        assertTrue(!LunaBridgeVelocityPlugin.shouldNotifyReappear(new VisibilityChange(
+                playerId, Visibility.UNKNOWN, Visibility.PUBLIC, true, "main", 2)));
+        assertTrue(!LunaBridgeVelocityPlugin.shouldNotifyReappear(new VisibilityChange(
+                playerId, Visibility.HIDDEN, Visibility.PUBLIC, false, "main", 3)));
+    }
+
+    @Test void svsyncVisibilitySubscriptionIsClosed() {
+        AtomicBoolean closed = new AtomicBoolean();
+        SVSyncApi api = new SVSyncApi() {
+            @Override public boolean hasState(UUID playerId) { return true; }
+            @Override public boolean isVanished(UUID playerId) { return false; }
+            @Override public Visibility getVisibility(UUID playerId) { return Visibility.PUBLIC; }
+            @Override public com.noasaba.svsync.api.SVSyncSubscription addVisibilityListener(
+                    com.noasaba.svsync.api.VisibilityListener listener) {
+                return () -> closed.set(true);
+            }
+        };
+        new SVSyncVisibilityProvider(api, org.slf4j.LoggerFactory.getLogger("test"), ignored -> { }).close();
+        assertTrue(closed.get());
     }
 
     @Test void administrationAllowsConsoleAndAuthorizedPlayersOnly() {

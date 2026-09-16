@@ -4,6 +4,7 @@ import com.github.ucchyocean.lunachat.api.LunaChatApiProvider;
 import com.github.ucchyocean.lunachat.api.LunaChatIntegrationApi;
 import com.github.ucchyocean.lunachat.api.RuntimeRole;
 import com.github.ucchyocean.lunachat.api.Subscription;
+import com.noasaba.svsync.api.VisibilityChange;
 import com.google.inject.Inject;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
@@ -78,7 +79,7 @@ public final class LunaBridgeVelocityPlugin {
             api = provider.current().orElseThrow(
                     () -> new IllegalStateException("LunaChat Integration API v1 is not currently available"));
             AuthorityValidation.require(api, RuntimeRole.NETWORK_AUTHORITY);
-            svsync = SVSyncVisibilityProvider.find(proxy, logger).orElse(null);
+            svsync = SVSyncVisibilityProvider.find(proxy, logger, this::visibilityChanged).orElse(null);
             if (svsync != null) logger.info("SVSync public presence filtering enabled.");
             proxy.getCommandManager().register(proxy.getCommandManager().metaBuilder("lunabridge")
                     .plugin(this).build(), new AdministrationCommand());
@@ -175,6 +176,8 @@ public final class LunaBridgeVelocityPlugin {
         seenPlayers = null;
         settings = null;
         api = null;
+        if (svsync != null) try { svsync.close(); }
+        catch (RuntimeException failure) { logger.warn("Could not close SVSync visibility subscription", failure); }
         svsync = null;
         connected.clear();
         playerLocations.clear();
@@ -190,6 +193,28 @@ public final class LunaBridgeVelocityPlugin {
 
     private static Map<String, String> values(String player, UUID uuid, String from, String server) {
         return Map.of("player", player, "uuid", uuid.toString(), "from", from, "server", server);
+    }
+
+    private void visibilityChanged(VisibilityChange change) {
+        if (change.visibility() == com.noasaba.svsync.api.Visibility.HIDDEN) {
+            lastKnownPublic.put(change.playerId(), false);
+            return;
+        }
+        if (change.visibility() == com.noasaba.svsync.api.Visibility.PUBLIC) {
+            lastKnownPublic.put(change.playerId(), true);
+        }
+        if (!shouldNotifyReappear(change)) return;
+        proxy.getScheduler().buildTask(this, () -> {
+            DiscordConnector connector = discord;
+            PlayerLocation location = playerLocations.get(change.playerId());
+            if (connector == null || location == null || !connected.contains(change.playerId())) return;
+            connector.notification("login", values(location.playerName(), change.playerId(), "",
+                    change.serverName().isBlank() ? location.serverName() : change.serverName()));
+        }).schedule();
+    }
+
+    static boolean shouldNotifyReappear(VisibilityChange change) {
+        return change.connected() && change.isExplicitReappear();
     }
 
     private void notifyJoinAfterSVSyncState(UUID playerId, Map<String, String> values, int attempt) {

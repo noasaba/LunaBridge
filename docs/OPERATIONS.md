@@ -34,6 +34,14 @@ is intentionally not used because one bot may legitimately serve multiple
 healthy proxies. Do not map the same Discord channel to multiple live proxy
 instances unless duplicate responses are intended.
 
+When SVSync is installed, LunaBridge obtains `SVSyncApi` from the `svsync`
+plugin instance and subscribes to its visibility transitions. `HIDDEN` players
+are excluded from automatic presence output; `PUBLIC` and not-yet-received
+`UNKNOWN` states remain public. A connected `HIDDEN -> PUBLIC` transition emits
+the normal login notification once, while initial `UNKNOWN -> PUBLIC` state
+does not duplicate the join notification. The subscription is closed with the
+Velocity bridge lifecycle. The API remains compile-only and is never shaded.
+
 Multiple Discord channel IDs may map to the same stable LunaChat `ChannelId`; Minecraft messages fan out to every configured Discord destination.
 
 Minecraft-to-Discord chat text is controlled by `discord.minecraft-chat-format`
