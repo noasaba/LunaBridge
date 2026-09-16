@@ -295,7 +295,7 @@ public final class DiscordConnector implements AutoCloseable {
 
     private String mappedLunaChannelId(MessageReceivedEvent event) {
         String parentId = event.getChannelType().isThread()
-                ? event.getChannel().asThreadChannel().getParentMessageChannel().getId() : null;
+                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
         return mappedLunaChannelId(settings, event.getChannel().getId(), parentId);
     }
 
@@ -335,7 +335,7 @@ public final class DiscordConnector implements AutoCloseable {
             return;
         }
         String parentId = event.getChannelType().isThread()
-                ? event.getChannel().asThreadChannel().getParentMessageChannel().getId() : null;
+                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
         if (mappedLunaChannelId(settings, event.getChannel().getId(), parentId) == null) {
             respondSlash(event, "LunaBridge commands are not enabled in this channel.");
             return;
