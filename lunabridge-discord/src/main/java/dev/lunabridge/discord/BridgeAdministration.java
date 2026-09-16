@@ -80,7 +80,7 @@ public final class BridgeAdministration {
             if (!settings.options().containsKey(enableKey) && !settings.options().containsKey(templateKey)) continue;
             validateBoolean(settings, lines, enableKey);
             if (!Boolean.parseBoolean(settings.option(enableKey, "true"))) continue;
-            String target = settings.option("discord.notifications." + type + "-channel-id", globalChannel).trim();
+            String target = DiscordConnector.notificationChannelId(settings, type);
             if (target.isEmpty()) lines.add("WAIT " + type + " notification has no channel ID");
             else if (!isSnowflake(target)) lines.add("FAIL " + type + " notification channel ID is invalid");
             if (settings.option(templateKey, "").isBlank()) {

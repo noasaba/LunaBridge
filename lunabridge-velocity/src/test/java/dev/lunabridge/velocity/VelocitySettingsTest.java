@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class VelocitySettingsTest {
@@ -33,6 +34,38 @@ class VelocitySettingsTest {
         assertTrue(persisted.contains("discord.minecraft-chat-format="));
         assertEquals("[{channel}] {username}: {message}{japanized}",
                 settings.discord.option("discord.minecraft-chat-format", ""));
+        assertTrue(Files.exists(directory.resolve("config.properties.v2.bak")));
+        VelocitySettings.load(directory);
+        assertEquals(persisted, Files.readString(directory.resolve("config.properties")));
+    }
+
+    @Test void futureSchemaIsRejectedWithoutChangingOriginal() throws Exception {
+        Path config = directory.resolve("config.properties");
+        String original = "config-version=999\ndiscord.token=keep-me\n";
+        Files.writeString(config, original);
+        assertThrows(IllegalStateException.class, () -> VelocitySettings.load(directory));
+        assertEquals(original, Files.readString(config));
+    }
+
+    @Test void legacyKeysAreCommentedAndBackupsNeverOverwrite() throws Exception {
+        Path config = directory.resolve("config.properties");
+        Files.writeString(config, """
+                # operator note
+                network.secret=do-not-log
+                server.id=legacy
+                discord.token=keep-me
+                """);
+        VelocitySettings.load(directory);
+        String migrated = Files.readString(config);
+        assertTrue(migrated.contains("# deprecated/removed in config-version 5"));
+        assertTrue(migrated.contains("# network.secret=do-not-log"));
+        assertTrue(migrated.contains("# operator note"));
+        assertTrue(Files.exists(directory.resolve("config.properties.v0.bak")));
+
+        Files.writeString(config, "network.secret=second\ndiscord.token=keep-me\n");
+        VelocitySettings.load(directory);
+        assertTrue(Files.exists(directory.resolve("config.properties.v0.bak.1")));
+        assertTrue(Files.readString(directory.resolve("config.properties.v0.bak")).contains("do-not-log"));
     }
 
     @Test void setupPersistsStableIdWithoutRemovingExistingConfiguration() throws Exception {

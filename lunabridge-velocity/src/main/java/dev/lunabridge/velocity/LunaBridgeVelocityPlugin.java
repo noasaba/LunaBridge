@@ -202,8 +202,9 @@ public final class LunaBridgeVelocityPlugin {
             if (!isPublic(playerId)) return;
             discord.notification("login", values);
             try {
-                if (seenPlayers != null && seenPlayers.markFirst(playerId)) {
-                    discord.notification("first-login", values);
+                if (seenPlayers != null && !seenPlayers.isSeen(playerId)
+                        && discord.notification("first-login", values)) {
+                    seenPlayers.markFirst(playerId);
                 }
             } catch (IOException failure) {
                 logger.error("Could not persist first-login state", failure);

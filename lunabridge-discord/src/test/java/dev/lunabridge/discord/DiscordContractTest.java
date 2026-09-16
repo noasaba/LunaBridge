@@ -28,6 +28,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.lang.reflect.Proxy;
 import net.dv8tion.jda.api.JDA;
+import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
+import net.dv8tion.jda.api.entities.channel.unions.IThreadContainerUnion;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -290,6 +292,30 @@ class DiscordContractTest {
         assertEquals("parent", DiscordConnector.mappedLunaChannelId(settings, "30000", "10000"));
         assertEquals("thread", DiscordConnector.mappedLunaChannelId(settings, "20000", "10000"));
         assertNull(DiscordConnector.mappedLunaChannelId(settings, "30000", null));
+    }
+
+    @Test void forumThreadUsesGeneralParentChannelWithoutRequiringMessageChannelParent() {
+        IThreadContainerUnion forumParent = (IThreadContainerUnion) Proxy.newProxyInstance(
+                IThreadContainerUnion.class.getClassLoader(), new Class<?>[]{IThreadContainerUnion.class},
+                (proxy, method, arguments) -> method.getName().equals("getId") ? "10000" : null);
+        ThreadChannel thread = (ThreadChannel) Proxy.newProxyInstance(
+                ThreadChannel.class.getClassLoader(), new Class<?>[]{ThreadChannel.class},
+                (proxy, method, arguments) -> method.getName().equals("getParentChannel") ? forumParent : null);
+        assertEquals("10000", DiscordConnector.parentChannelId(thread));
+    }
+
+    @Test void blankSpecificNotificationChannelFallsBackToGlobalChannel() {
+        DiscordSettings settings = new DiscordSettings("token", Map.of(), Map.of(
+                "discord.notifications.channel-id", "10000",
+                "discord.notifications.first-login-channel-id", ""));
+        assertEquals("10000", DiscordConnector.notificationChannelId(settings, "first-login"));
+    }
+
+    @Test void longExternalMessageKeepsImageUrl() {
+        String url = "https://cdn.discordapp.com/image.png";
+        String content = DiscordConnector.externalContent("x".repeat(DiscordText.MAX_LENGTH), List.of(url));
+        assertTrue(content.length() <= DiscordText.MAX_LENGTH);
+        assertTrue(content.endsWith(" " + url));
     }
 
     @Test void doctorReportsInvalidUserFacingOptionsWithoutExposingToken() {

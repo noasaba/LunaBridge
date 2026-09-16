@@ -11,6 +11,7 @@ import net.dv8tion.jda.api.JDABuilder;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageEmbed;
 import net.dv8tion.jda.api.entities.channel.middleman.MessageChannel;
+import net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.events.session.ReadyEvent;
@@ -167,20 +168,24 @@ public final class DiscordConnector implements AutoCloseable {
 
     private record MinecraftChatParts(String message, String japanized) { }
 
-    public void notification(String type, Map<String, String> placeholders) {
-        if (closed.get() || !Boolean.parseBoolean(settings.option("discord.notifications.enable." + type, "true"))) return;
+    public boolean notification(String type, Map<String, String> placeholders) {
+        if (closed.get() || !Boolean.parseBoolean(settings.option("discord.notifications.enable." + type, "true"))) return false;
         String template = settings.option("discord.notifications." + type, "");
-        if (template.isBlank()) return;
-        String channelId = settings.option("discord.notifications." + type + "-channel-id",
-                settings.option("discord.notifications.channel-id", "")).trim();
-        if (!channelId.matches("[0-9]{5,32}")) return;
+        if (template.isBlank()) return false;
+        String channelId = notificationChannelId(settings, type);
+        if (!channelId.matches("[0-9]{5,32}")) return false;
         String roleId = "first-login".equals(type)
                 ? settings.option("discord.notifications.first-login-role-id", "").trim() : "";
         boolean allowRole = roleId.matches("[0-9]{5,32}");
         String text = format(template, placeholders);
         if (allowRole) text = "<@&" + roleId + "> " + text;
-        send(allowRole ? DiscordText.suppressMentionsExceptLeadingRole(text) : DiscordText.suppressMentions(text),
+        return send(allowRole ? DiscordText.suppressMentionsExceptLeadingRole(text) : DiscordText.suppressMentions(text),
                 channelId, allowRole);
+    }
+
+    static String notificationChannelId(DiscordSettings settings, String type) {
+        String specific = settings.option("discord.notifications." + type + "-channel-id", "").trim();
+        return specific.isEmpty() ? settings.option("discord.notifications.channel-id", "").trim() : specific;
     }
 
     public void finalNotification(String type, Map<String, String> placeholders) {
@@ -278,7 +283,10 @@ public final class DiscordConnector implements AutoCloseable {
         String urls = imageUrls.stream().filter(url -> !url.isBlank()).distinct()
                 .collect(java.util.stream.Collectors.joining(" "));
         if (urls.isEmpty()) return DiscordText.fit(messageContent);
-        return DiscordText.fit(messageContent.isBlank() ? urls : messageContent + " " + urls);
+        if (messageContent.isBlank()) return DiscordText.fit(urls);
+        if (urls.length() >= DiscordText.MAX_LENGTH) return DiscordText.fit(urls);
+        int messageLimit = DiscordText.MAX_LENGTH - urls.length() - 1;
+        return DiscordText.fit(messageContent, messageLimit) + " " + urls;
     }
 
     private static List<String> externalMediaUrls(Message message) {
@@ -295,7 +303,7 @@ public final class DiscordConnector implements AutoCloseable {
 
     private String mappedLunaChannelId(MessageReceivedEvent event) {
         String parentId = event.getChannelType().isThread()
-                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
+                ? parentChannelId(event.getChannel().asThreadChannel()) : null;
         return mappedLunaChannelId(settings, event.getChannel().getId(), parentId);
     }
 
@@ -303,6 +311,10 @@ public final class DiscordConnector implements AutoCloseable {
         String direct = settings.discordChannelToLunaChatChannelId().get(channelId);
         return direct != null ? direct : parentChannelId == null ? null
                 : settings.discordChannelToLunaChatChannelId().get(parentChannelId);
+    }
+
+    static String parentChannelId(ThreadChannel thread) {
+        return thread.getParentChannel().getId();
     }
 
     private static String stripExternalDisplayName(String text) {
@@ -335,7 +347,7 @@ public final class DiscordConnector implements AutoCloseable {
             return;
         }
         String parentId = event.getChannelType().isThread()
-                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
+                ? parentChannelId(event.getChannel().asThreadChannel()) : null;
         if (mappedLunaChannelId(settings, event.getChannel().getId(), parentId) == null) {
             respondSlash(event, "LunaBridge commands are not enabled in this channel.");
             return;

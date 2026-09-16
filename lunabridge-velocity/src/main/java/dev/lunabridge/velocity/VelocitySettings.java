@@ -36,19 +36,21 @@ final class VelocitySettings {
         try { version = Integer.parseInt(properties.getProperty("config-version", "0")); }
         catch (NumberFormatException invalid) { throw new IllegalStateException("config-version must be numeric"); }
         if (version > CURRENT_SCHEMA) throw new IllegalStateException("Velocity configuration schema is newer than this LunaBridge build");
-        Set<String> removals = new HashSet<>();
+        Map<String, String> deprecations = new LinkedHashMap<>();
         if (hasLegacySettings(properties)) {
-            Files.copy(file, file.resolveSibling("config.properties.v0.bak"), StandardCopyOption.REPLACE_EXISTING);
             properties.stringPropertyNames().stream().filter(key -> key.startsWith("network.") || key.startsWith("limits.")
-                    || key.equals("server.id") || isLegacyChannelKey(key)).forEach(removals::add);
-            removals.forEach(properties::remove);
+                    || key.equals("server.id") || isLegacyChannelKey(key))
+                    .forEach(key -> deprecations.put(key, "deprecated/removed in config-version 5"));
+            deprecations.keySet().forEach(properties::remove);
         }
         Map<String, String> updates = new LinkedHashMap<>();
-        addDefault(properties, updates, "discord.minecraft-chat-format", DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
-        addDefault(properties, updates, "discord.external-display-name-format", DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT);
+        for (int schema = version; schema < CURRENT_SCHEMA; schema++) migrateStep(schema, properties, updates);
         properties.setProperty("config-version", Integer.toString(CURRENT_SCHEMA));
         if (version != CURRENT_SCHEMA) updates.put("config-version", Integer.toString(CURRENT_SCHEMA));
-        if (!updates.isEmpty() || !removals.isEmpty()) updateFile(file, updates, removals);
+        if (!updates.isEmpty() || !deprecations.isEmpty()) {
+            createBackup(file, version);
+            updateFile(file, updates, Set.of(), deprecations);
+        }
 
         Map<String, String> mappings = new LinkedHashMap<>();
         for (String property : properties.stringPropertyNames()) {
@@ -107,23 +109,75 @@ final class VelocitySettings {
         }
     }
 
+    private static void migrateStep(int schema, Properties properties, Map<String, String> updates) {
+        switch (schema) {
+            case 0, 1, 2 -> { /* Historical schemas require no value transformation. */ }
+            case 3 -> addDefault(properties, updates, "discord.minecraft-chat-format",
+                    DiscordSettings.DEFAULT_MINECRAFT_CHAT_FORMAT);
+            case 4 -> addDefault(properties, updates, "discord.external-display-name-format",
+                    DiscordSettings.DEFAULT_EXTERNAL_DISPLAY_NAME_FORMAT);
+            default -> throw new IllegalStateException("unsupported Velocity configuration schema " + schema);
+        }
+    }
+
+    private static void createBackup(Path file, int version) throws IOException {
+        String base = "config.properties.v" + version + ".bak";
+        Path backup = file.resolveSibling(base);
+        int generation = 1;
+        while (Files.exists(backup)) backup = file.resolveSibling(base + "." + generation++);
+        Files.copy(file, backup);
+    }
+
     private static void updateFile(Path file, Map<String, String> requestedUpdates, Set<String> removals) throws IOException {
+        updateFile(file, requestedUpdates, removals, Map.of());
+    }
+
+    private static void updateFile(Path file, Map<String, String> requestedUpdates, Set<String> removals,
+                                   Map<String, String> deprecations) throws IOException {
         Set<String> written = new HashSet<>();
         List<String> output = new java.util.ArrayList<>();
         for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
             String key = propertyKey(line);
             if (key == null) { output.add(line); continue; }
             if (removals.contains(key)) continue;
+            if (deprecations.containsKey(key)) {
+                output.add("# " + deprecations.get(key));
+                output.add("# " + line);
+                continue;
+            }
             if (requestedUpdates.containsKey(key)) {
                 if (written.add(key)) output.add(key + "=" + requestedUpdates.get(key));
             } else output.add(line);
         }
         requestedUpdates.forEach((key, value) -> { if (!written.contains(key)) output.add(key + "=" + value); });
         Path temporary = file.resolveSibling("config.properties.tmp");
-        Files.write(temporary, output, StandardCharsets.UTF_8);
-        try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
-        catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
-            Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+        try {
+            Files.write(temporary, output, StandardCharsets.UTF_8);
+            validatePersisted(temporary);
+            try { Files.move(temporary, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING); }
+            catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+                Files.move(temporary, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    private static void validatePersisted(Path file) throws IOException {
+        Properties candidate = new Properties();
+        try (var input = Files.newBufferedReader(file, StandardCharsets.UTF_8)) { candidate.load(input); }
+        int schema;
+        try { schema = Integer.parseInt(candidate.getProperty("config-version", "-1")); }
+        catch (NumberFormatException invalid) { throw new IOException("generated config-version is invalid", invalid); }
+        if (schema != CURRENT_SCHEMA) throw new IOException("generated configuration schema is incomplete");
+        for (String property : candidate.stringPropertyNames()) {
+            String prefix = "discord.channels.";
+            String suffix = ".lunachat-channel-id";
+            if (property.startsWith(prefix) && property.endsWith(suffix)) {
+                String stableId = candidate.getProperty(property, "").trim();
+                if (!stableId.isEmpty()) validateMapping(
+                        property.substring(prefix.length(), property.length() - suffix.length()), stableId);
+            }
         }
     }
 

@@ -53,12 +53,20 @@ the default LunaChat channel format.
 
 For Discord-to-Minecraft messages, image attachments are appended as their
 Discord CDN URLs. A post containing only images therefore appears as the URL
-or URLs in Minecraft chat; non-image attachments are not forwarded.
+or URLs in Minecraft chat; non-image attachments are not forwarded. When the
+combined message exceeds Minecraft's external-message limit, message text is
+shortened before the image URLs so the links remain visible.
 
 Inline `discord.token` remains backward compatible, but `discord.token-file` takes precedence and avoids copying the credential into generated configuration. Relative token-file paths are resolved from the plugin data directory. Paper standalone uses the equivalent YAML keys under `discord`.
 
 A channel mapping is checked with `api.channels().find(channelId)` at startup; missing IDs, unsupported roles, unavailable providers, incompatible API majors, and missing capabilities fail closed before JDA connects while the administration command remains available for diagnosis where the platform permits it.
 
-When an old config contains network settings or name-based mappings, LunaBridge writes `config.yml.v0.bak` or `config.properties.v0.bak`, removes the old transport keys, and logs that stable ChannelIds must be configured manually. It never copies a network secret into the new configuration and never silently turns a channel name into a permanent ID.
+When an old config contains network settings or name-based mappings, LunaBridge
+writes a non-overwriting generation backup such as `config.properties.v0.bak`
+or `.bak.1`. Removed keys remain in place as commented evidence with their
+removal schema instead of disappearing. Migration proceeds one schema at a
+time, validates a temporary file, and atomically replaces the original only
+after validation. It never logs a network secret or silently turns a channel
+name into a permanent ID.
 
 On disable, the API subscription is closed before the Discord connector. JDA outbound work is drained for at most three seconds during the Velocity shutdown notification; pending publish retries are cancelled. Local LunaChat operation is not owned or stopped by LunaBridge.

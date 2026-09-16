@@ -36,6 +36,8 @@ final class SeenPlayerStore {
             }
         }
     }
+    synchronized boolean isSeen(UUID id) { return seen.contains(id); }
+
     synchronized boolean markFirst(UUID id) throws IOException {
         if (seen.contains(id)) return false;
         if (seen.size() >= MAX_ENTRIES) return false;
